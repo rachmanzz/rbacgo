@@ -30,10 +30,12 @@ core engine and storage.
 - Provide a framework-agnostic RBAC engine (roles, permissions, user-role assignment).
 - Support role **hierarchy** (parent/child inheritance) with cycle detection.
 - Ship standalone adapters for:
-  - **`http`** — standard library `net/http` middleware (also serves Chi users).
-  - **fiber** — Fiber v2/v3.
-  - **echo** — Echo v4.
-  - **gin** — Gin v1.
+  - **`http`** — standard library `net/http` middleware (latest Go release, also serves Chi users).
+  - **fiber** — Fiber v3 only (currently v3.4.x).
+  - **echo** — Echo v5 only (currently v5.3.x).
+  - **gin** — Gin v1 latest (currently v1.12.x).
+- Older framework versions (e.g. Fiber v2, Echo v4) are **not** supported; users must
+  upgrade to the listed majors to use the adapters.
 - Allow **per-framework installation** so users pull only the packages they need.
 - Provide **pluggable storage**:
   - SQL store as the primary persistent backend.
@@ -171,14 +173,35 @@ go get github.com/rachmanzz/rbacgo
   built on the same engine and customization points.
 - **FR-6 — Storage interface:** a `Store` interface abstracts persistence; shipped
   implementations:
-  - **SQL store (primary):** PostgreSQL/SQLite/MySQL-compatible schema for
+  - **SQL store (primary):** PostgreSQL- and SQLite-compatible schema for
     `roles`, `permissions`, `role_permissions`, `users`, `user_roles`,
-    `role_hierarchy` (or adjacency via `parents`).
+    `role_hierarchy` (or adjacency via `parents`). **Fully pluggable at the driver/pool
+    level:** the store accepts an existing `*sql.DB` supplied by the user, so they are free
+    to use their own driver and pool — e.g. `pgx`/`pgxpool` (via the pgx `stdlib` adapter)
+    for PostgreSQL, `go-sqlite3` for SQLite, or any other `database/sql` driver.
+  - **Default store: SQLite (embedded).** When no store is configured, the engine uses an
+    embedded SQLite store — `:memory:` by default (zero setup), or a file path for
+    persistence.
   - **LRU cache layer:** caches effective permission sets per user/role with configurable
     TTL and LRU eviction; backends: **in-memory** and **Redis**.
 - **FR-7 — Concurrency safety:** engine and cache are safe for concurrent reads/writes.
 - **FR-8 — Customizability:** allow custom 401/403 handlers, custom user-ID extraction from
   the request (header, JWT claim, session), and custom logger hooks.
+- **FR-9 — Environment configuration:** all store/cache settings are configurable via
+  environment variables. Variables use the default prefix **`RBAC_`** (configurable via
+  `WithEnvPrefix("X_")`), read once at construction time:
+
+  | Env var | Default | Purpose |
+  | --- | --- | --- |
+  | `RBAC_STORE` | `sqlite` | `sqlite`, `sql` (user-supplied `*sql.DB`), `memory` |
+  | `RBAC_SQLITE_PATH` | `:memory:` | SQLite DSN / file path |
+  | `RBAC_DATABASE_URL` | — | Postgres/other DSN passed to the configured driver |
+  | `RBAC_CACHE` | `memory` | `memory`, `redis`, `none` |
+  | `RBAC_CACHE_CAPACITY` | `1024` | LRU capacity |
+  | `RBAC_CACHE_TTL` | `5m` | Cache TTL (Go duration string) |
+  | `RBAC_REDIS_ADDR` | `localhost:6379` | Redis address |
+  | `RBAC_REDIS_PASSWORD` | — | Redis password (optional) |
+  | `RBAC_REDIS_DB` | `0` | Redis DB index |
 
 ---
 
@@ -186,7 +209,9 @@ go get github.com/rachmanzz/rbacgo
 
 - **Performance:** cache hit decision under 1 ms; O(1) lookup via map + LRU on hot path.
 - **Compatibility:** works with the latest stable Go release; core engine has **zero**
-  third-party dependencies; adapters depend only on their framework + core.
+  third-party dependencies; adapters depend only on their framework + core. Adapter
+  compatibility matrix — Fiber **v3**, Echo **v5**, Gin **v1 latest**, `net/http`
+  (latest stdlib).
 - **Backward compatibility:** public API is additive only; no breaking changes without a
   major version bump.
 - **Security:** hierarchy resolution must not over-grant; cycles rejected; no permission
@@ -203,8 +228,19 @@ go get github.com/rachmanzz/rbacgo
 ```go
 package rbacgo
 
+// Default: embedded SQLite store. ":memory:" by default; pass a path for persistence.
+enforcer := rbacgo.New()
+// or: enforcer := rbacgo.New(rbacgo.WithSQLite("data/rbac.db"))
+
+// Environment-driven config (default prefix "RBAC_"; override via WithEnvPrefix).
+enforcer := rbacgo.New(rbacgo.WithConfigFromEnv())
+// e.g. RBAC_STORE=sqlite RBAC_SQLITE_PATH=data/rbac.db RBAC_CACHE=redis RBAC_REDIS_ADDR=...
+
+// Fully pluggable SQL store: supply your own *sql.DB.
+// Example with pgxpool (PostgreSQL), via the pgx stdlib adapter:
+db, _ := sql.Open("pgx", "postgres://user:pass@localhost/db") // or pgxpool
 enforcer := rbacgo.New(
-    rbacgo.WithSQLStore(db),        // primary persistence
+    rbacgo.WithSQLStore(sqlstore.New(db)), // your driver/pool, any database/sql impl
     rbacgo.WithLRU(
         rbacgo.LRUBackendMemory(capacity, ttl),
         // or: rbacgo.LRUBackendRedis(redisClient, capacity, ttl),
