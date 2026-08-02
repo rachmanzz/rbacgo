@@ -158,11 +158,27 @@
 - [x] Re-verify all 6 modules: `go mod tidy -diff`, build, vet, `-race` tests, coverage
       (core ≥ 80%, adapters 100%), `govulncheck` (exit 0; GO-2026-5932 informational only),
       Postgres 17 integration test.
-- [x] Commit + push — **only on explicit user request** (AGENTS.md).
+- [ ] **R1** (P5.8) — Fix default `:memory:` SQLite store not being concurrency-safe
+      (`SetMaxOpenConns(1)` + `SetMaxIdleConns(1)` in `newSQLiteStore`) + concurrent regression
+      test `TestSQLiteMemoryConcurrentAccess` (verified to fail pre-fix with "no such table: roles").
+- [ ] **R2** (P5.9) — README: correct "defaults ... in-memory LRU work out of the box" → LRU is
+      opt-in (`WithLRU`/`WithConfigFromEnv`).
+- [ ] **R3** (P5.10) — Add `.github/dependabot.yml` (weekly; gomod for all 6 modules + github-actions).
+- [ ] **R4** (P5.11) — Fix same `:memory:` pool bug in the env path (`STORE=sql` + `DATABASE_URL=:memory:`):
+      cap the internally-created sqlite3 pool; regression test `TestConfigFromEnvSQLiteMemorySingleConnection`.
+- [ ] **R5** (P5.12) — Add `error_paths_test.go` to close the documented error-path coverage gaps
+      (store-failure propagation, defensive cycle/missing-parent paths, SQL error paths, Redis
+      JSON/scan errors, env error paths); core coverage 84.0% → 94.2%.
+- [ ] Re-verify after round-2 fixes: build, vet, full `-race` suite (incl. new concurrent + error-path tests),
+      coverage, `go mod tidy -diff`, Postgres 17 integration.
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
-- [x] No regressions; all verification sweeps green.
+- [ ] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),
+      R2 (README cache claim), R3 (dependabot.yml), R4 (env-path `:memory:` concurrency fix),
+      R5 (error-path coverage → 94.2%).
+- [ ] No regressions; all verification sweeps green.
 - [x] Docs consistent: README, plan §6, phases P5, gap.md, third-party.md.
 - [x] Release tags `v0.1.0-1` remain identical for all publishable files.
 

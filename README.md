@@ -286,10 +286,12 @@ export RBAC_REDIS_ADDR=localhost:6379
 | `RBAC_REDIS_PASSWORD` | — | Redis password (optional) |
 | `RBAC_REDIS_DB` | `0` | Redis DB index |
 
-You do not need to set any of these to get started — the defaults (embedded
-`:memory:` SQLite + in-memory LRU) work out of the box. Set them only for what
-you change; the [Validation checklist](#validation-checklist) points to the env
-vars relevant to each behavior you may need to adjust.
+You do not need to set any of these to get started — `rbacgo.New()` works out of
+the box with an embedded `:memory:` SQLite store. The in-memory LRU cache is
+opt-in: add `WithLRU(...)`, or call `WithConfigFromEnv()` (which defaults
+`RBAC_CACHE=memory`). Set the env vars above only for what you change; the
+[Validation checklist](#validation-checklist) points to the env vars relevant to
+each behavior you may need to adjust.
 
 ## Examples
 

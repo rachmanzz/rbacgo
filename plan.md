@@ -106,12 +106,18 @@ Reference: full hard audit performed 2026-08-02 on the released `v0.1.0-1` state
 - **Freshness:** all direct deps current (go-sqlite3 v1.14.49, go-redis v9.21.0,
   miniredis v2.38.0, pgx v5.10.0, Fiber v3.4.0, Echo v5.3.1, Gin v1.12.0).
 - **Licenses:** MIT LICENSE; no MPL-2.0; THIRD_PARTY_NOTICES covers all runtime deps.
-- **Tests:** core 83.9% (≥ 80%), adapters 100% incl. option-function tests, `-race` clean.
+- **Tests:** core 94.2% (≥ 80%), adapters 100% incl. option-function tests, `-race` clean.
 - **Benchmark:** 142.5 ns/op cache hit (claim 147 ns/op).
 - **CI:** YAML valid; `-run TestSQLStorePostgres` matches; DSN CI (:5432) vs local (:5433) wired;
   `permissions: contents: read`.
 - **Release:** all 5 tags identical to HEAD for publishable files (`*.go`, go.mod, go.sum);
   Postgres 17 integration PASS; no secrets/junk tracked.
+- **Licenses (round 2):** full transitive graph re-scanned via `go list -m all` on all 5 published
+  modules — zero MPL/GPL/LGPL/AGPL/unlicense; graph is MIT/BSD-2/BSD-3/Apache-2.0/ISC only.
+- **govulncheck (round 2):** re-run on all 6 modules — all exit 0; GO-2026-5932 informational only.
+- **Freshness (round 2):** all direct deps current; only indirect updates exist (fasthttp,
+  gofiber/schema, gofiber/utils, x/sync, x/text, ...) — F8-class, no action.
+- **No `+incompatible` modules; all pseudo-versions are legitimate upstream** (pgservicefile, chzyer/*).
 
 ### 6.2 Findings & planned fixes
 
@@ -126,6 +132,19 @@ Reference: full hard audit performed 2026-08-02 on the released `v0.1.0-1` state
 | F7 | `gap.md` benchmark figure 147 ns/op vs measured 142.5 ns/op | INFO | None (machine-dependent, still accurate) | Accepted |
 | F8 | Root module indirect deps older than adapters (x/text v0.29.0 vs v0.40.0, x/sync v0.17.0 vs v0.22.0; x/net v0.56.0 vs v0.57.0) | INFO | None (indirect, no vulns, policy is direct-only; re-check at release) | Accepted |
 | F9 | No `.gitignore` in repo | LOW | Add minimal `.gitignore` (binaries, coverage.out, .env, editor dirs) | **Done** (P5.5) |
+
+### 6.3 Hard audit round 2 (2026-08-02, code-level)
+
+Code-level audit of every source file (core + 4 adapters), driver docs in the module cache,
+full module-graph license scan, and git hygiene. Execution tracked in `phases.md` P5 sub-tasks.
+
+| # | Finding | Severity | Fix | Status |
+| --- | --- | --- | --- | --- |
+| R1 | Default `:memory:` SQLite store is not concurrency-safe: the database/sql pool may open a 2nd connection, which opens a **brand-new empty in-memory DB** ("no such table: roles" / silently missing data under concurrent access). Driver README confirms each `:memory:` connection is a separate DB. Violates the "concurrency-safe out of the box" claim (FR-7); tests passed only because they run sequentially | HIGH | `SetMaxOpenConns(1)` + `SetMaxIdleConns(1)` when DSN is `:memory:`; concurrent regression test (fails pre-fix with `no such table: roles`) | **Done** (P5.8) |
+| R2 | README: "defaults (embedded `:memory:` SQLite + in-memory LRU) work out of the box" — plain `rbacgo.New()` enables **no** cache; LRU is opt-in (`WithLRU`/`WithConfigFromEnv`) | LOW | Reword README paragraph; clarify LRU opt-in | **Done** (P5.9) |
+| R3 | third-party.md §4 recommends Dependabot/Renovate; no dependabot config present | LOW | Add `.github/dependabot.yml` (weekly; gomod for all 6 modules + github-actions) | **Done** (P5.10) |
+| R4 | Same `:memory:` pool bug reachable via `RBAC_STORE=sql` + `RBAC_DATABASE_URL=:memory:` — env.go creates the `*sql.DB` internally (sqlite3 driver) without capping the pool | HIGH | Cap `SetMaxOpenConns(1)`/`SetMaxIdleConns(1)` for sqlite3 `:memory:` DSN in env.go; regression test `TestConfigFromEnvSQLiteMemorySingleConnection` (fails pre-fix with `opened 2 connections`) | **Done** (P5.11) |
+| R5 | Error-path coverage gaps from round-2 audit (EnforceCtx 75%, collectEffective 76.5%, collectRoleNames 66.7%, checkCycles 73.1%, NewSQLStore 71.4%, sqlstore AddRole 70.4%, newSQLiteStore 72.7%, redisLRU Set 75%) | LOW (test gap) | Add `error_paths_test.go` covering store-failure propagation, injected-cycle/defensive paths, SQL error paths (closed DB + dropped tables + non-insertable view), Redis JSON/scan errors, env error paths; total coverage 84.0% → **94.2%** | **Done** (P5.12) |
 
 ## 7. Definition of Done
 

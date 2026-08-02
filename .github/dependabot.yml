@@ -1,0 +1,51 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      core-deps:
+        patterns: ["*"]
+  - package-ecosystem: "gomod"
+    directory: "/http"
+    schedule:
+      interval: "weekly"
+    groups:
+      http-deps:
+        patterns: ["*"]
+  - package-ecosystem: "gomod"
+    directory: "/fiber"
+    schedule:
+      interval: "weekly"
+    groups:
+      fiber-deps:
+        patterns: ["*"]
+  - package-ecosystem: "gomod"
+    directory: "/echo"
+    schedule:
+      interval: "weekly"
+    groups:
+      echo-deps:
+        patterns: ["*"]
+  - package-ecosystem: "gomod"
+    directory: "/gin"
+    schedule:
+      interval: "weekly"
+    groups:
+      gin-deps:
+        patterns: ["*"]
+  - package-ecosystem: "gomod"
+    directory: "/examples"
+    schedule:
+      interval: "weekly"
+    groups:
+      examples-deps:
+        patterns: ["*"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      ci-actions:
+        patterns: ["*"]

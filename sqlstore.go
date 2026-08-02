@@ -17,6 +17,11 @@ type sqlStore struct {
 	sql sqlQueries
 }
 
+// dbStats exposes database/sql pool statistics for tests.
+func (s *sqlStore) dbStats() sql.DBStats {
+	return s.db.Stats()
+}
+
 // sqlQueries holds the parametrized statements for one dialect.
 type sqlQueries struct {
 	createTables string

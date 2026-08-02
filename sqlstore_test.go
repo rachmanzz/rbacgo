@@ -3,6 +3,8 @@ package rbacgo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -111,5 +113,55 @@ func TestEnforcerWithSQLStore(t *testing.T) {
 	}
 	if e.Enforce(ctx, "u1", "articles", "delete") {
 		t.Error("expected deny delete")
+	}
+}
+
+func TestSQLiteMemoryConcurrentAccess(t *testing.T) {
+	ctx := context.Background()
+	store := sqliteStore(t, ":memory:")
+	s, ok := store.(*sqlStore)
+	if !ok {
+		t.Fatalf("newSQLiteStore returned %T, want *sqlStore", store)
+	}
+	if err := store.AddRole(ctx, Role{Name: "viewer", Permissions: []Permission{{Resource: "a", Action: "read"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A pool that opens a second ":memory:" connection would see an empty
+	// database ("no such table") or silently missing data. The default store
+	// must serialize all access onto one connection.
+	const workers, iters = 32, 20
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				user := fmt.Sprintf("u%d-%d", id, i)
+				if err := store.AssignRole(ctx, user, "viewer"); err != nil {
+					errCh <- fmt.Errorf("assign %s: %w", user, err)
+					return
+				}
+				roles, err := store.GetRoles(ctx, user)
+				if err != nil {
+					errCh <- fmt.Errorf("getroles %s: %w", user, err)
+					return
+				}
+				if len(roles) != 1 || roles[0] != "viewer" {
+					errCh <- fmt.Errorf("getroles %s = %v, want [viewer]", user, roles)
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+
+	if stats := s.dbStats(); stats.OpenConnections > 1 {
+		t.Errorf(":memory: store opened %d connections, want at most 1", stats.OpenConnections)
 	}
 }

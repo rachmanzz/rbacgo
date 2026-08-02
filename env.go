@@ -78,6 +78,12 @@ func WithConfigFromEnv() Option {
 				if err != nil {
 					return fmt.Errorf("rbacgo: open %s: %w", driver, err)
 				}
+				if driver == "sqlite3" && url == ":memory:" {
+					// See newSQLiteStore: a shared in-memory DB must be
+					// serialized onto a single pooled connection.
+					db.SetMaxOpenConns(1)
+					db.SetMaxIdleConns(1)
+				}
 				if err := WithSQLStore(db)(e); err != nil {
 					return err
 				}
