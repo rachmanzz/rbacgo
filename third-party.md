@@ -37,8 +37,9 @@
 | go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.49 | MIT | ✅ |
 | go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.21.0 | BSD-2-Clause | ✅ |
 | miniredis | `github.com/alicebob/miniredis/v2` | In-process Redis for tests (test-only) | v2.38.0 | MIT | ✅ |
+| pgx | `github.com/jackc/pgx/v5` | PostgreSQL driver for the **integration test** (`//go:build integration`, test-only) | v5.10.0 | MIT | ✅ |
 
-### Storage (`rbacgo/store`)
+### Storage (recommended drivers, in the root module)
 
 > **Pluggable design:** the SQL store accepts a user-supplied `*sql.DB`. The drivers below
 > are the recommended ones, but users may bring their own `database/sql` driver/pool
@@ -114,4 +115,8 @@ when redistributing binaries:
 
 - [x] Decide MySQL driver status — **removed; PostgreSQL + SQLite only** (2026-08-02).
 - [x] Decide LRU implementation: **in-house LRU** (MIT, zero-dep) chosen.
-- [x] Add `THIRD_PARTY_NOTICES` generation step to CI/release. — **Done (2026-08-02):** `THIRD_PARTY_NOTICES` added at repo root with the required MIT/BSD notices; a CI generation/re-verify step is still to be wired up before release.
+- [x] Add `THIRD_PARTY_NOTICES` generation step to CI/release. — **Done (2026-08-02):**
+  `THIRD_PARTY_NOTICES` added at repo root with the required MIT/BSD notices; `.github/workflows/ci.yml`
+  verifies `LICENSE` + `THIRD_PARTY_NOTICES` presence and the required notices on every push/PR.
+- [x] Postgres dialect validated against a real server. — **Done (2026-08-02):** `sqlstore_postgres_test.go`
+  (`//go:build integration`) runs against PostgreSQL 17 and is part of CI via a service container.

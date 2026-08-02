@@ -113,7 +113,7 @@
 
 ---
 
-## P4 — Examples, Docs & Release (v1.0)
+## P4 — Examples, Docs & Release (v0.1.0-1)
 
 **Reference:** PRD §10 M4, §12; plan M4; gap P2 items.
 
@@ -121,14 +121,14 @@
 - [x] Runnable example per adapter under `examples/`.
 - [x] README with install snippets and quick start.
 - [x] godoc-quality doc comments on all exported symbols.
-- Multi-module release tags starting at `v0.1.0-1`
+- [x] Multi-module release tags starting at `v0.1.0-1`
   (`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).
-- Final version re-verification (Fiber v3, Echo v5, Gin v1).
+- [x] Final version re-verification (Fiber v3.4, Echo v5.3, Gin v1.12 — latest as of 2026-08-02).
 
 ### Acceptance criteria
 - [x] Each adapter has a runnable example.
-- Installation commands from plan.md §5 work end-to-end.
-- Tags published per Go multi-module conventions.
+- [x] Installation commands from plan.md §5 work end-to-end.
+- [x] Tags published per Go multi-module conventions.
 
 ---
 

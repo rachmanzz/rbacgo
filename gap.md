@@ -21,25 +21,26 @@ and `plan.md`, so work can be prioritized and tracked.
 | `gin` adapter | **Done** | Gin v1 middleware | ✅ Complete |
 | Multi-module layout | **Done** | Root `go.mod` + per-adapter `go.mod` | ✅ Complete |
 | Examples | **Done** (`examples/`) | Runnable examples per adapter | ✅ Complete |
-| Tests | **Done** | ≥ 80% core coverage (84.3%), adapter suites, benchmarks (147 ns/op cache hit) | ✅ Complete |
-| Docs | **Done** | README, THIRD_PARTY_NOTICES, godoc, install snippets | ✅ Complete (godoc polish before tag) |
-| CI | None | Release tags, build/test pipeline (future) | Set up before release |
-| Version verification | Done (Fiber v3.4, Echo v5.3, Gin v1.12) | Keep in sync | Re-verify before release |
+| Tests | **Done** | ≥ 80% core coverage (83.9%), adapter suites (100%), Postgres integration test, benchmarks (147 ns/op cache hit) | ✅ Complete |
+| Docs | **Done** | README, THIRD_PARTY_NOTICES, LICENSE, godoc, install snippets | ✅ Complete |
+| CI | **Done** | `.github/workflows/ci.yml`: build/vet/race per module, Postgres integration, `govulncheck`, compliance (LICENSE + notices + direct-deps freshness) | ✅ Complete |
+| Version verification | **Done** | Fiber v3.4, Echo v5.3, Gin v1.12; published `v0.1.0-1` + per-adapter tags | ✅ Complete |
+| Release tags | **Done** | `v0.1.0-1`, `http/v0.1.0-1`, `fiber/v0.1.0-1`, `echo/v0.1.0-1`, `gin/v0.1.0-1` (verified end-to-end) | ✅ Complete |
 
 ## 3. Priority order
 
-All P0–P4 items are complete. Remaining before v1.0 release:
+All P0–P4 items are complete and the first pre-release (`v0.1.0-1`) is published. Remaining
+follow-ups:
 
-1. **CI** — build/test pipeline, dependency freshness + vulnerability check
-   (`govulncheck`, `go list -m -u`), `THIRD_PARTY_NOTICES` generation step.
-2. **Release** — per-module version tags starting at `v0.1.0-1`
-   (`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).
-3. **Re-verify** — adapter versions + licenses before tagging (Fiber v3, Echo v5,
-   Gin v1).
+1. **Stable release** — tag `v0.1.0` (drop `-1`) once the pre-release is validated; no code
+   changes expected.
+2. **Re-verify** — adapter versions + licenses before each release (`go list -m -u`,
+   `govulncheck`, Dependabot/Renovate).
 
 ## 4. Things that block progress
 
-- None at this time. Framework versions to target are already verified.
+- None at this time. Framework versions to target are already verified and the first
+  pre-release (`v0.1.0-1`) is published.
 - Future blocker to watch: Echo v5 and Fiber v3 are relatively new majors; their APIs may
   shift within 2026. Re-verify pinned adapter versions before tagging.
 

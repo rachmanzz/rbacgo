@@ -30,16 +30,20 @@ Install only what you need:
 
 ```sh
 # core engine only
-go get github.com/rachmanzz/rbacgo
+go get github.com/rachmanzz/rbacgo@v0.1.0-1
 
 # stdlib / net/http users (also Chi)
-go get github.com/rachmanzz/rbacgo/http
+go get github.com/rachmanzz/rbacgo/http@v0.1.0-1
 
 # framework-specific
-go get github.com/rachmanzz/rbacgo/fiber   # Fiber v3
-go get github.com/rachmanzz/rbacgo/echo    # Echo v5
-go get github.com/rachmanzz/rbacgo/gin     # Gin v1
+go get github.com/rachmanzz/rbacgo/fiber@v0.1.0-1   # Fiber v3
+go get github.com/rachmanzz/rbacgo/echo@v0.1.0-1    # Echo v5
+go get github.com/rachmanzz/rbacgo/gin@v0.1.0-1     # Gin v1
 ```
+
+> The first public release is the pre-release **`v0.1.0-1`**, so pin the version
+> explicitly (Go does not select pre-releases for `@latest`). Once a stable
+> `v0.1.x` is tagged, plain `go get github.com/rachmanzz/rbacgo/http` works too.
 
 Each adapter is its own Go module with independent versioning
 (`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).

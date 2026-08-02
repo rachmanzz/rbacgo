@@ -82,12 +82,16 @@ rbacgo/
 ## 5. Installation commands (target)
 
 ```sh
-go get github.com/rachmanzz/rbacgo               # core engine
-go get github.com/rachmanzz/rbacgo/http          # stdlib / Chi
-go get github.com/rachmanzz/rbacgo/fiber         # Fiber v3
-go get github.com/rachmanzz/rbacgo/echo          # Echo v5
-go get github.com/rachmanzz/rbacgo/gin           # Gin v1
+go get github.com/rachmanzz/rbacgo@v0.1.0-1       # core engine
+go get github.com/rachmanzz/rbacgo/http@v0.1.0-1  # stdlib / Chi
+go get github.com/rachmanzz/rbacgo/fiber@v0.1.0-1 # Fiber v3
+go get github.com/rachmanzz/rbacgo/echo@v0.1.0-1  # Echo v5
+go get github.com/rachmanzz/rbacgo/gin@v0.1.0-1   # Gin v1
 ```
+
+The first public release is the pre-release `v0.1.0-1`, so pin the version explicitly
+(Go does not select pre-releases for `@latest`). All five commands are verified to work
+end-to-end against the published tags.
 
 ## 6. Definition of Done
 

@@ -49,5 +49,8 @@
 
 ## 5. Delivery limitations (current repo state)
 
-- No code exists yet — everything is at planning/documentation stage.
-- No CI pipeline yet; release tagging process not yet scripted.
+- Engine, stores, cache, and all four adapters are implemented and tested (P1–P4 complete).
+- First public release `v0.1.0-1` tagged per Go multi-module conventions
+  (`v0.1.0-1`, `http/v0.1.0-1`, `fiber/v0.1.0-1`, `echo/v0.1.0-1`, `gin/v0.1.0-1`).
+- CI pipeline (`.github/workflows/ci.yml`) runs build/vet/race tests, Postgres integration
+  tests, `govulncheck`, and compliance checks.
