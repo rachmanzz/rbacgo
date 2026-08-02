@@ -216,6 +216,16 @@ enforcer, err := rbacgo.New(
 )
 ```
 
+> **Attention — LRU capacity & TTL.** The in-memory LRU implementation
+> (`memoryLRU`, see [`cache.go`](cache.go), especially `NewMemoryLRU` and the
+> `Set`/eviction logic) caches one effective permission set per **user**, held
+> in memory until evicted. With many distinct users this can consume a
+> significant amount of memory. **Please re-validate and calibrate the `capacity`
+> and `ttl` you pass to `NewMemoryLRU` (or the `RBAC_CACHE_CAPACITY` /
+> `RBAC_CACHE_TTL` env vars) against your expected number of active users** so
+> that memory usage does not balloon. When memory is a hard constraint, prefer
+> the Redis backend or set `RBAC_CACHE=none`.
+
 ## Environment configuration
 
 All store/cache settings are configurable via `RBAC_`-prefixed environment
@@ -224,6 +234,19 @@ construction via `WithConfigFromEnv()`:
 
 ```go
 enforcer, err := rbacgo.New(rbacgo.WithConfigFromEnv())
+```
+
+Precedence: explicit options (e.g. `WithMemoryStore()`, `WithLRU(...)`) win
+over environment variables, which in turn win over defaults.
+
+Example:
+
+```sh
+export RBAC_STORE=sqlite
+export RBAC_SQLITE_PATH=data/rbac.db
+export RBAC_CACHE=redis
+export RBAC_CACHE_TTL=10m
+export RBAC_REDIS_ADDR=localhost:6379
 ```
 
 | Env var | Default | Purpose |
@@ -237,6 +260,11 @@ enforcer, err := rbacgo.New(rbacgo.WithConfigFromEnv())
 | `RBAC_REDIS_ADDR` | `localhost:6379` | Redis address |
 | `RBAC_REDIS_PASSWORD` | — | Redis password (optional) |
 | `RBAC_REDIS_DB` | `0` | Redis DB index |
+
+You do not need to set any of these to get started — the defaults (embedded
+`:memory:` SQLite + in-memory LRU) work out of the box. Set them only for what
+you change; the [Validation checklist](#validation-checklist) points to the env
+vars relevant to each behavior you may need to adjust.
 
 ## Examples
 
@@ -260,6 +288,51 @@ Try `curl -H "X-User-ID: alice" localhost:8080/articles`.
 - **Adapters:** Fiber **v3**, Echo **v5**, Gin **v1 latest**, `net/http`
   (latest stdlib). Older majors are not supported.
 
+## Validation checklist
+
+> The defaults below are safe, but you **must validate** them against your own
+> deployment before going to production. Each item links to the relevant code
+> and the environment variables you may need.
+
+1. **User-ID extraction** — defaults to reading the `X-User-ID` request header
+   (see `WithUserID` in `http/http.go`, `fiber/fiber.go`, `echo/echo.go`,
+   `gin/gin.go`). **Do not trust a client-set header in production**: any caller
+   could set it and impersonate any user. Override `WithUserID` with your own
+   authentication (JWT claims, session cookie, upstream proxy, ...).
+
+2. **Resource/action mapping** — defaults to `(URL path, HTTP method)` (see
+   `WithResourceAction` in the same adapter files). Validate that your
+   registered permission resources exactly match the paths your routes serve
+   (including the leading `/`) and that actions match your methods
+   (`GET`, `POST`, ...). A mismatch fails closed (403), but verify it is what
+   you intend.
+
+3. **LRU capacity & TTL** — see the attention note in
+   [Cache layer](#cache-layer). Re-validate `capacity`/`ttl` against your
+   expected number of active users so memory does not balloon.
+   Env vars: `RBAC_CACHE`, `RBAC_CACHE_CAPACITY`, `RBAC_CACHE_TTL`.
+
+4. **SQL store driver** — when using `RBAC_STORE=sql` (or `WithSQLStore`), make
+   sure the driver is imported and registered (e.g.
+   `_ "github.com/jackc/pgx/v5/stdlib"` for Postgres) and that the database is
+   reachable. Env vars: `RBAC_DATABASE_URL`.
+
+5. **SQLite `:memory:` default** — the default store is an embedded in-memory
+   SQLite database (see `sqlite.go`): data is process-local and lost on
+   restart. Use `WithSQLite(path)` / `RBAC_SQLITE_PATH` for persistence, and a
+   shared SQL store (e.g. Postgres) for multi-instance deployments.
+   Env var: `RBAC_SQLITE_PATH`.
+
+6. **Role hierarchy** — cycles are rejected at registration (see
+   `detectCycle` in `memory_store.go` / `checkCycles` in `sqlstore.go`), but
+   validate your role graph to avoid unintended over-granting through
+   inheritance (decision-log ADR-004).
+
+7. **401 vs 403 semantics** — default responses are JSON
+   (`{"error":"unauthorized"}`, `{"error":"forbidden"}`). Validate that your
+   client/UI expects them, and override with `WithUnauthorizedHandler` /
+   `WithDeniedHandler` per adapter.
+
 ## Roadmap & non-goals
 
 - v1: roles, hierarchy, SQL/SQLite/memory storage, LRU cache (memory + Redis),
@@ -271,3 +344,7 @@ Try `curl -H "X-User-ID: alice" localhost:8080/articles`.
 ## License
 
 [MIT](LICENSE). Third-party notices: see [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+
+## Acknowledgments
+
+This library was developed with the assistance of AI tooling.
