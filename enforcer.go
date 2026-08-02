@@ -2,6 +2,7 @@ package rbacgo
 
 import (
 	"context"
+	"sort"
 )
 
 // permissionSet maps resource -> action -> allowed. It is JSON-serializable so
@@ -141,6 +142,38 @@ func (e *Enforcer) EnforceCtx(ctx context.Context, userID, resource, action stri
 		return false, err
 	}
 	return perms[resource][action], nil
+}
+
+// PermissionView returns a user's access-rights snapshot for a
+// "my permissions" endpoint: the directly assigned roles and the effective
+// permission set (own + inherited, deduplicated, alphabetically sorted).
+// Permissions reflect the cache when one is enabled.
+func (e *Enforcer) PermissionView(ctx context.Context, userID string) (PermissionView, error) {
+	roles, err := e.store.GetRoles(ctx, userID)
+	if err != nil {
+		return PermissionView{}, err
+	}
+	ps, err := e.permissionsFor(ctx, userID)
+	if err != nil {
+		return PermissionView{}, err
+	}
+	perms := make(map[string][]string, len(ps))
+	for resource, actions := range ps {
+		list := make([]string, 0, len(actions))
+		for action, allowed := range actions {
+			if allowed {
+				list = append(list, action)
+			}
+		}
+		sort.Strings(list)
+		perms[resource] = list
+	}
+	roles = append([]string(nil), roles...)
+	sort.Strings(roles)
+	if roles == nil {
+		roles = []string{}
+	}
+	return PermissionView{UserID: userID, Roles: roles, Permissions: perms}, nil
 }
 
 // HasRole reports whether userID holds the given role (including inheritance).

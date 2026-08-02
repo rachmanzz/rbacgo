@@ -145,6 +145,36 @@ Rules:
    implement them report `ErrUnsupported`, so existing custom stores keep
    working unchanged.
 
+## Exposing permissions to a frontend
+
+The library is framework-agnostic, so it returns a ready-to-serialize snapshot
+instead of writing HTTP responses. `Enforcer.PermissionView` builds the
+effective access rights of a user — directly assigned roles plus the
+deduplicated permission set (own + inherited, sorted) — for a
+`GET /api/v1/me/permissions` endpoint:
+
+```go
+view, err := enforcer.PermissionView(ctx, "user-123")
+w.Header().Set("Content-Type", "application/json")
+json.NewEncoder(w).Encode(view) // in real apps: never return raw errors
+```
+
+```json
+{
+  "user_id": "user-123",
+  "roles": ["editor"],
+  "permissions": {
+    "/articles": ["GET", "POST"],
+    "/comments": ["GET"]
+  }
+}
+```
+
+The frontend may use this payload to render menus, hide buttons, and guard
+routes — but the backend must still call `Enforce` on every protected action;
+the payload is a UX hint, not a security decision. Identity must come from the
+authenticated session, never from the request body.
+
 ## Middleware adapters
 
 All adapters share the same defaults and options: user-ID extraction (default:

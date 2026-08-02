@@ -276,3 +276,31 @@ role is privileged, so it must not be callable by arbitrary users.
   `ErrPermissionDenied`.
 - Custom `Store` implementations continue to compile and work; the new
   operations simply report `ErrUnsupported` there.
+
+## ADR-011 — PermissionView: framework-agnostic frontend permission payload
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** plan §6.6, phases P5.16
+
+### Context
+Frontends need the user's effective access rights to render menus, hide
+buttons, and guard routes. rbacgo is framework-agnostic, so it must not write
+HTTP responses.
+
+### Decision
+- Add `Enforcer.PermissionView(ctx, userID) PermissionView` returning a
+  JSON-ready snapshot: `{"user_id", "roles", "permissions"}`.
+- `roles` = directly assigned roles; `permissions` = effective set (own +
+  inherited) flattened to `resource -> sorted actions`, deduplicated, cache
+  aware.
+- Deterministic serialization: roles/actions sorted; empty sets serialize as
+  `[]`/`{}` (never `null`).
+- The payload is a UX hint only: every protected endpoint must still
+  `Enforce` server-side, and the user identity must come from the
+  authenticated session, never from the request body.
+
+### Consequences
+- Apps implement their own HTTP handler (one `Encode` call) on top of
+  `PermissionView`; the library stays framework-free.
+- Frontend logic must never be treated as an authorization decision.

@@ -227,6 +227,25 @@ role-management capability. Design: plan §6.5, decision-log ADR-006.
       `govulncheck`, Postgres 17 integration).
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
+### PermissionView for frontend responses (P5.16, 2026-08-02)
+
+User-approved design: `GET /me/permissions` payload with `user_id`, `roles`
+(direct assignments), `permissions` (effective, deduplicated, sorted). Library
+stays framework-agnostic — it produces the JSON-ready snapshot, not the HTTP
+response.
+
+- [x] `model.go`: `PermissionView` struct with `json` tags (`user_id`, `roles`, `permissions`).
+- [x] `enforcer.go`: `PermissionView(ctx, userID)` — roles from `GetRoles`,
+      effective set from `permissionsFor` (cache-aware), sorted + always
+      non-nil (JSON `[]` / `{}` for empty users).
+- [x] `permission_view_test.go`: flattened inheritance + sorted actions, exact
+      JSON shape, empty user, cache path, store-error propagation; core
+      coverage stays **100.0%**.
+- [x] README "Exposing permissions to a frontend" + plan §6.6 + ADR-011.
+- [ ] Final verification sweep (build, vet, `-race` 6 modules, coverage, `go mod tidy -diff`,
+      `govulncheck`, Postgres 17 integration).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),

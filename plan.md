@@ -182,6 +182,22 @@ role-management capability. Design decisions (see decision-log ADR-006):
   drops only the target user's entry.
 - Execution tracked in `phases.md` P5.15; core coverage stays 100.0%.
 
+### 6.6 Frontend permission payload (2026-08-02, feature)
+
+User-approved design for exposing access rights to a frontend as a
+framework-agnostic JSON snapshot (`Enforcer.PermissionView`):
+
+- `PermissionView{user_id, roles, permissions}` — `roles` = direct
+  assignments; `permissions` = effective set (own + inherited) flattened to
+  `resource -> sorted actions`, deduplicated.
+- Cache-aware: reuses `permissionsFor`, so LRU/Redis caching applies.
+- Deterministic output: actions and roles sorted; empty users serialize as
+  `[]` / `{}` (never `null`).
+- Security stance: the payload is a UX hint for menus/route guards; every
+  protected endpoint must still `Enforce` server-side, and identity must come
+  from the session, not the request body.
+- Execution tracked in `phases.md` P5.16; decision-log ADR-011.
+
 ## 7. Definition of Done
 
 - Core engine test coverage ≥ 80%.
