@@ -321,6 +321,30 @@ exactly as user decided ("policy_version harus ada di db dan redis").
 - [x] plan §6.9 + ADR-015.
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
+### Fuzzing core invariants (P5.20, 2026-08-02)
+
+User-approved: close the "100% coverage ≠ proof" gap with native Go fuzzing
+(`testing.F`, stdlib only — no ffuf or other dependency needed).
+
+- [x] `fuzz_test.go` (new): three targets with a deterministic PRNG seeded from
+      the input bytes, so every corpus entry reproduces exactly:
+  - `FuzzHierarchyResolution` — library `EnforceCtx` / `HasRole` /
+    `PermissionView` must match an independent BFS oracle for arbitrary role
+    graphs, names (incl. empty/space/unicode), and permissions.
+  - `FuzzGraphSafety` — no panic, errors only from the documented sentinels,
+    and any successfully registered graph stays acyclic.
+  - `FuzzPolicyVersionMonotonic` — reported version always equals the count of
+    successful mutations.
+- [x] Fuzzing immediately caught a test-oracle bug (assign semantics):
+      `AssignRole` is idempotent (duplicate = success, no state change, but
+      still bumps `policy_version`); oracle now mirrors both behaviors and the
+      regression is pinned.
+- [x] Ran: ~1.9M execs total across the three targets (927K hierarchy / 478K
+      safety / 444K version), all green.
+- [x] CI job `fuzz`: 30 s per target per run.
+- [x] Full suite stays green: coverage 100.0%, `-race`, gofmt/vet clean.
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),
