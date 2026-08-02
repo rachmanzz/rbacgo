@@ -399,3 +399,66 @@ must be shared — "policy_version harus ada di db dan redis".
   detectable without polling.
 - The payload gains one field; existing consumers must ignore unknown
   top-level fields (JSON-compatible).
+
+## ADR-016 — no own users table
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** phases P5.21
+
+### Context
+The SQL store created a `users` table (`id TEXT PRIMARY KEY`) purely as a
+registry anchor for `user_roles` user IDs. User feedback: the library must not
+create its own user table — applications already own one, and the registry
+causes real problems (INSERT failures when the app's `users` table has other
+NOT NULL columns, name collisions in shared schemas, duplicated identity
+bookkeeping).
+
+### Decision
+- Remove the `users` table entirely: `user_roles.user_id` is an opaque string
+  with no FK anchor. Referential integrity between users and roles is the
+  application's concern, not the library's.
+- `AssignRole` now writes only the `user_roles` row (previously it also
+  inserted the user ID into `users` with `ON CONFLICT DO NOTHING`).
+- Nothing else depended on the table: `DeleteRole`'s in-use check reads
+  `user_roles`, and no query joined `users`.
+- Migration uses `CREATE TABLE IF NOT EXISTS`, so databases created by older
+  versions keep a harmless orphan `users` table (never read or written again);
+  the table prefix test now expects 5 tables (`roles`, `role_permissions`,
+  `role_parents`, `user_roles`, `meta`).
+
+### Consequences
+- The library coexists with any application schema: no user table, no
+  collisions, no constraints imposed on the app's users table.
+- Store `DeleteRole`/`UnassignRole` semantics unchanged; core coverage stays
+  100.0%; PG17 integration still green.
+
+## ADR-017 — assignment table named `role_assignments`
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** plan.md §6.7, phases P5.22
+
+### Context
+After removing the `users` table (ADR-016), the user→role assignment table was
+still called `user_roles`. A first rename to `rbac_roles` was rejected as
+redundant: "RBAC" already means "role-based access control", so `rbac_roles`
+reads as "roles roles". The name must describe the table's content and follow
+the existing `roles`/`role_permissions`/`role_parents` naming pattern.
+
+### Decision
+- The assignment table is named `role_assignments` (prefixed variants follow:
+  `myapp_role_assignments`); DDL and every query updated in place.
+- The migration uses `CREATE TABLE IF NOT EXISTS`; databases created by older
+  versions keep orphan `user_roles`/`rbac_roles` tables that the library never
+  reads or writes. This is a pre-release breaking schema change: assignments
+  must be moved into `role_assignments` (or re-created) before upgrading.
+- Test cleanup keeps `DROP TABLE IF EXISTS` for the legacy names alongside the
+  new one to tolerate old schemas in test databases.
+
+### Consequences
+- Unambiguous, non-redundant schema naming; the library now creates exactly
+  `roles`, `role_permissions`, `role_parents`, `role_assignments`, `meta`.
+- Breaking for any database that had assignments in `user_roles`/`rbac_roles`;
+  documented migration note in phases.md P5.22.
+

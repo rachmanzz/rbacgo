@@ -2,6 +2,7 @@ package rbacgo
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -45,6 +46,41 @@ func TestSQLStoreCRUD(t *testing.T) {
 	}
 	if _, ok, _ := s.GetRole(ctx, "missing"); ok {
 		t.Error("GetRole(missing) reported found")
+	}
+}
+
+// TestSQLStoreNoOwnUsersTable pins ADR-016: the store must not create or touch
+// a users table, so it coexists with an application-owned one even when that
+// table has columns the library could not fill.
+func TestSQLStoreNoOwnUsersTable(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create app users table: %v", err)
+	}
+	s, err := NewSQLStore(db)
+	if err != nil {
+		t.Fatalf("NewSQLStore: %v", err)
+	}
+	if err := s.AddRole(ctx, Role{Name: "viewer"}); err != nil {
+		t.Fatalf("AddRole: %v", err)
+	}
+	if err := s.AssignRole(ctx, "app-user-1", "viewer"); err != nil {
+		t.Fatalf("AssignRole next to app users table: %v", err)
+	}
+	roles, err := s.GetRoles(ctx, "app-user-1")
+	if err != nil || len(roles) != 1 || roles[0] != "viewer" {
+		t.Fatalf("GetRoles = %v, %v", roles, err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		t.Fatalf("count app users: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("library inserted into app users table: %d rows", n)
 	}
 }
 

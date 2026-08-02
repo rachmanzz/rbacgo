@@ -174,8 +174,9 @@ go get github.com/rachmanzz/rbacgo
 - **FR-6 — Storage interface:** a `Store` interface abstracts persistence; shipped
   implementations:
   - **SQL store (primary):** PostgreSQL- and SQLite-compatible schema for
-    `roles`, `permissions`, `role_permissions`, `users`, `user_roles`,
-    `role_hierarchy` (or adjacency via `parents`). **Fully pluggable at the driver/pool
+    `roles`, `permissions`, `role_permissions`, `role_assignments`,
+    `role_hierarchy` (or adjacency via `parents`). No own `users` table —
+    user IDs are opaque strings in `role_assignments` (ADR-016/017). **Fully pluggable at the driver/pool
     level:** the store accepts an existing `*sql.DB` supplied by the user, so they are free
     to use their own driver and pool — e.g. `pgx`/`pgxpool` (via the pgx `stdlib` adapter)
     for PostgreSQL, `go-sqlite3` for SQLite, or any other `database/sql` driver.

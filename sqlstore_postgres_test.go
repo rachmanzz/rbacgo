@@ -40,12 +40,16 @@ func TestSQLStorePostgres(t *testing.T) {
 
 	cleanup := []string{
 		"DROP TABLE IF EXISTS pg2_meta",
+		"DROP TABLE IF EXISTS pg2_role_assignments",
+		"DROP TABLE IF EXISTS pg2_rbac_roles",
 		"DROP TABLE IF EXISTS pg2_user_roles",
 		"DROP TABLE IF EXISTS pg2_users",
 		"DROP TABLE IF EXISTS pg2_role_parents",
 		"DROP TABLE IF EXISTS pg2_role_permissions",
 		"DROP TABLE IF EXISTS pg2_roles",
 		"DROP TABLE IF EXISTS meta",
+		"DROP TABLE IF EXISTS role_assignments",
+		"DROP TABLE IF EXISTS rbac_roles",
 		"DROP TABLE IF EXISTS user_roles",
 		"DROP TABLE IF EXISTS users",
 		"DROP TABLE IF EXISTS role_parents",

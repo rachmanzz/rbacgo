@@ -86,7 +86,7 @@ func TestTablePrefixCreatesPrefixedTables(t *testing.T) {
 		}
 		names = append(names, n)
 	}
-	want := []string{"myapp_meta", "myapp_role_parents", "myapp_role_permissions", "myapp_roles", "myapp_user_roles", "myapp_users"}
+	want := []string{"myapp_meta", "myapp_role_assignments", "myapp_role_parents", "myapp_role_permissions", "myapp_roles"}
 	if len(names) != len(want) {
 		t.Fatalf("prefixed tables = %v, want %v", names, want)
 	}

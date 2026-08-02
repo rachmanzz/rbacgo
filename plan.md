@@ -207,9 +207,10 @@ User-requested: namespace SQL tables per application/tenant sharing one DB
   (letters/digits/underscore, no leading digit; empty = default names).
 - Applied via `NewSQLStore(db, opts...)` / `WithSQLStore(db, opts...)`
   (variadic, backward compatible) and `RBAC_SQL_TABLE_PREFIX` env var.
-- All 5 tables (`roles`, `role_permissions`, `role_parents`, `users`,
-  `user_roles`) and every query are built from the prefix; migration creates
-  the prefixed tables.
+- All tables (`roles`, `role_permissions`, `role_parents`, `role_assignments`,
+  `meta`) and every query are built from the prefix; migration creates
+  the prefixed tables. The store never creates a `users` table — user IDs
+  are opaque strings in `role_assignments` (see ADR-016/017).
 - Execution tracked in `phases.md` P5.17; decision-log ADR-013.
 
 ### 6.8 policy_version (2026-08-02, feature)

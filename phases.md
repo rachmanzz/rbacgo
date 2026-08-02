@@ -345,6 +345,42 @@ User-approved: close the "100% coverage ≠ proof" gap with native Go fuzzing
 - [x] Full suite stays green: coverage 100.0%, `-race`, gofmt/vet clean.
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
+### no own users table (P5.21, 2026-08-02)
+
+User decision: the SQL store must not create its own `users` table — apps own
+their user data.
+
+- [x] `sqlstore.go`: removed the `users` table, its `CREATE`, the
+      `insertUser` query and the extra INSERT inside `AssignRole`; user IDs
+      are opaque strings in `role_assignments` (no FK anchor).
+- [x] `table_prefix_test.go`: prefixed schema now expects 5 tables
+      (`myapp_roles`, `myapp_role_permissions`, `myapp_role_parents`,
+      `myapp_role_assignments`, `myapp_meta`).
+- [x] `error_paths_test.go`: dropped the obsolete `insertUser` failure case
+      (coverage stays 100.0%).
+- [x] Docs: README (table list + coexistence note), plan §6.7, ADR-016.
+- [x] Verification: coverage 100.0%, `-race`, gofmt/vet, PG17 integration
+      green (cleanup keeps the `users` DROP for older schemas).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
+### table rename: user_roles -> role_assignments (P5.22, 2026-08-02)
+
+User decision: the assignment table must be named `role_assignments` (final
+name; `rbac_roles` was rejected as redundant since "RBAC" already means
+"role-based access control").
+
+- [x] `sqlstore.go`: assignment table is `role_assignments` (prefixed →
+      `myapp_role_assignments`); queries/DDL updated in place.
+- [x] Tests: `table_prefix_test.go` table list, `extra_test.go` expected
+      assign SQL, `error_paths_test.go` DROP target, PG17 cleanup drops
+      old and new names (IF EXISTS).
+- [x] Docs: README table list, plan §6.7, ADR-017.
+- [x] Verification: coverage 100.0%, `-race`, gofmt/vet, PG17 green.
+- **Migration note:** pre-release breaking schema change — databases created
+  by older versions keep orphan `user_roles`/`rbac_roles` tables; assignments
+  must be copied into `role_assignments` (or re-created) before upgrading.
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),

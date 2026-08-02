@@ -134,7 +134,7 @@ func TestPostgresDialectQueries(t *testing.T) {
 	if q.insertRole != "INSERT INTO roles (name) VALUES ($1)" {
 		t.Errorf("unexpected insertRole: %q", q.insertRole)
 	}
-	if q.assignRole != "INSERT INTO user_roles (user_id, role_name) VALUES ($1, $2) ON CONFLICT DO NOTHING" {
+	if q.assignRole != "INSERT INTO role_assignments (user_id, role_name) VALUES ($1, $2) ON CONFLICT DO NOTHING" {
 		t.Errorf("unexpected assignRole: %q", q.assignRole)
 	}
 	if got := dialectPostgres.param(3); got != "$3" {

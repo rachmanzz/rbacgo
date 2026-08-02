@@ -302,12 +302,16 @@ collide:
 ```go
 enforcer, err := rbacgo.New(rbacgo.WithSQLStore(db, rbacgo.WithTablePrefix("myapp_")))
 // tables: myapp_roles, myapp_role_permissions, myapp_role_parents,
-//         myapp_users, myapp_user_roles
+//         myapp_role_assignments, myapp_meta
 ```
 
 The prefix must be a safe identifier fragment (letters, digits, underscore;
 not starting with a digit); an empty prefix keeps the default names. The env
 path supports the same via `RBAC_SQL_TABLE_PREFIX` (STORE=sql only).
+
+The store never creates its own `users` table: user IDs are opaque strings in
+`role_assignments`, so it coexists with the application's own user table and
+never touches it.
 
 ### Embedded SQLite (default)
 

@@ -356,25 +356,12 @@ func TestSQLStoreDropTableErrorPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("AssignRole insertUser fails", func(t *testing.T) {
-		s := newStore(t)
-		if err := s.AddRole(ctx, Role{Name: "r"}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.db.Exec(`DROP TABLE users`); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.AssignRole(ctx, "u", "r"); err == nil {
-			t.Error("expected insertUser error")
-		}
-	})
-
 	t.Run("AssignRole assignRole fails", func(t *testing.T) {
 		s := newStore(t)
 		if err := s.AddRole(ctx, Role{Name: "r"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.db.Exec(`DROP TABLE user_roles`); err != nil {
+		if _, err := s.db.Exec(`DROP TABLE role_assignments`); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.AssignRole(ctx, "u", "r"); err == nil {

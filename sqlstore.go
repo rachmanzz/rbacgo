@@ -30,7 +30,6 @@ type sqlQueries struct {
 	insertRole        string
 	insertPerm        string
 	insertParent      string
-	insertUser        string
 	assignRole        string
 	userRoles         string
 	rolePerms         string
@@ -138,8 +137,7 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 	roles := tablePrefix + "roles"
 	rolePerms := tablePrefix + "role_permissions"
 	roleParents := tablePrefix + "role_parents"
-	users := tablePrefix + "users"
-	userRoles := tablePrefix + "user_roles"
+	userRoles := tablePrefix + "role_assignments"
 	meta := tablePrefix + "meta"
 	return sqlQueries{
 		createTables: strings.Join([]string{
@@ -150,7 +148,6 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 			`CREATE TABLE IF NOT EXISTS ` + roleParents + ` (` +
 				`role_name TEXT NOT NULL, parent_name TEXT NOT NULL,` +
 				`PRIMARY KEY (role_name, parent_name))`,
-			`CREATE TABLE IF NOT EXISTS ` + users + ` (id TEXT PRIMARY KEY)`,
 			`CREATE TABLE IF NOT EXISTS ` + userRoles + ` (` +
 				`user_id TEXT NOT NULL, role_name TEXT NOT NULL,` +
 				`PRIMARY KEY (user_id, role_name))`,
@@ -163,8 +160,6 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 		insertParent: fmt.Sprintf(
 			`INSERT INTO %s (role_name, parent_name) VALUES (%s, %s) %s`,
 			roleParents, p(1), p(2), noConflict),
-		insertUser: fmt.Sprintf(
-			`INSERT INTO %s (id) VALUES (%s) %s`, users, p(1), noConflict),
 		assignRole: fmt.Sprintf(
 			`INSERT INTO %s (user_id, role_name) VALUES (%s, %s) %s`,
 			userRoles, p(1), p(2), noConflict),
@@ -292,9 +287,6 @@ func (s *sqlStore) AssignRole(ctx context.Context, userID, roleName string) erro
 	}
 	if !ok {
 		return ErrRoleNotFound
-	}
-	if _, err := s.db.ExecContext(ctx, s.sql.insertUser, userID); err != nil {
-		return err
 	}
 	if _, err := s.db.ExecContext(ctx, s.sql.assignRole, userID, roleName); err != nil {
 		return err
