@@ -168,7 +168,7 @@
       cap the internally-created sqlite3 pool; regression test `TestConfigFromEnvSQLiteMemorySingleConnection`.
 - [ ] **R5** (P5.12) — Add `error_paths_test.go` to close the documented error-path coverage gaps
       (store-failure propagation, defensive cycle/missing-parent paths, SQL error paths, Redis
-      JSON/scan errors, env error paths); core coverage 84.0% → 94.2%.
+      JSON/scan errors, env error paths); core coverage 84.0% → 94.4% (collectRoleNames 100%).
 - [ ] Re-verify after round-2 fixes: build, vet, full `-race` suite (incl. new concurrent + error-path tests),
       coverage, `go mod tidy -diff`, Postgres 17 integration.
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).

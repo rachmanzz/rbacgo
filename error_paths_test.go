@@ -100,6 +100,23 @@ func TestEnforcerCollectErrors(t *testing.T) {
 			t.Fatalf("EnforceCtx = %v, want store error on parent lookup", err)
 		}
 	})
+
+	t.Run("HasRole recursion error on parent", func(t *testing.T) {
+		ms := NewMemoryStore()
+		if err := ms.AddRole(ctx, Role{Name: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := ms.AddRole(ctx, Role{Name: "a", Parents: []string{"b"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := ms.AssignRole(ctx, "u1", "a"); err != nil {
+			t.Fatal(err)
+		}
+		e := mustEnforcer(t, WithStore(failGetRoleStore{Store: ms, fail: map[string]bool{"b": true}}))
+		if _, err := e.HasRole(ctx, "u1", "b"); !errors.Is(err, errTest) {
+			t.Fatalf("HasRole = %v, want store error on parent lookup", err)
+		}
+	})
 }
 
 func TestEnforceInjectedCycleDenies(t *testing.T) {
