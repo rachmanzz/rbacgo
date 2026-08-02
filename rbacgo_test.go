@@ -101,6 +101,7 @@ func TestInvalidRoleRejected(t *testing.T) {
 	e := mustEnforcer(t, WithMemoryStore())
 	cases := []Role{
 		{Name: ""},
+		{Name: "   "},
 		{Name: "x", Permissions: []Permission{{Resource: "", Action: "read"}}},
 		{Name: "x", Permissions: []Permission{{Resource: "r", Action: ""}}},
 	}

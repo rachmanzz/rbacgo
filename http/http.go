@@ -71,6 +71,9 @@ func writeJSON(status int, body any) func(http.ResponseWriter, *http.Request) {
 //	handler := httpadapter.New(enforcer, httpadapter.WithUserID(...))
 //	http.Handle("/articles", handler(http.HandlerFunc(listArticles)))
 func New(enforcer *rbacgo.Enforcer, opts ...Option) func(http.Handler) http.Handler {
+	if enforcer == nil {
+		panic("rbacgo: nil enforcer")
+	}
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(&o)

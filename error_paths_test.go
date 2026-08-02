@@ -520,6 +520,60 @@ func TestMemoryStoreAddRoleCycleRollback(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreGetRoleReturnsCopy(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	if err := s.AddRole(ctx, Role{
+		Name:        "a",
+		Permissions: []Permission{{Resource: "r", Action: "read"}},
+		Parents:     []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	role, ok, err := s.GetRole(ctx, "a")
+	if err != nil || !ok {
+		t.Fatalf("GetRole = ok %v, err %v", ok, err)
+	}
+	role.Permissions[0] = Permission{Resource: "HACKED", Action: "admin"}
+	role.Permissions = append(role.Permissions, Permission{Resource: "x", Action: "y"})
+	role.Parents = append(role.Parents, "ghost")
+
+	got, _, _ := s.GetRole(ctx, "a")
+	if len(got.Permissions) != 1 || got.Permissions[0] != (Permission{Resource: "r", Action: "read"}) {
+		t.Errorf("store corrupted by caller mutation: %+v", got.Permissions)
+	}
+	if len(got.Parents) != 0 {
+		t.Errorf("store parents corrupted by caller mutation: %+v", got.Parents)
+	}
+}
+
+func TestMemoryStoreGetRoleConcurrentCopy(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	if err := s.AddRole(ctx, Role{Name: "a", Permissions: []Permission{{Resource: "r", Action: "read"}}}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 500; j++ {
+				r, _, _ := s.GetRole(ctx, "a")
+				if len(r.Permissions) > 0 {
+					r.Permissions[0] = Permission{Resource: "x", Action: "y"}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	got, _, _ := s.GetRole(ctx, "a")
+	if len(got.Permissions) != 1 || got.Permissions[0] != (Permission{Resource: "r", Action: "read"}) {
+		t.Errorf("store corrupted under concurrent GetRole+mutation: %+v", got.Permissions)
+	}
+}
+
 func TestDriverRegistered(t *testing.T) {
 	if !driverRegistered("sqlite3") {
 		t.Fatal("sqlite3 driver should be registered")

@@ -144,3 +144,12 @@ func TestCustomExtractors(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
+
+func TestNilEnforcerPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for nil enforcer")
+		}
+	}()
+	Middleware(nil)
+}

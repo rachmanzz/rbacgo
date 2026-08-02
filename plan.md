@@ -147,6 +147,23 @@ full module-graph license scan, and git hygiene. Execution tracked in `phases.md
 | R5 | Error-path coverage gaps from round-2 audit (EnforceCtx 75%, collectEffective 76.5%, collectRoleNames 66.7%, checkCycles 73.1%, NewSQLStore 71.4%, sqlstore AddRole 70.4%, newSQLiteStore 72.7%, redisLRU Set 75%) | LOW (test gap) | Add `error_paths_test.go` covering store-failure propagation, injected-cycle/defensive paths, SQL error paths (closed DB + dropped tables + non-insertable view), Redis JSON/scan errors, env error paths; total coverage 84.0% → **94.4%** (collectRoleNames 100%) | **Done** (P5.12) |
 | R6 | Final 3 uncovered statements are the `sql.Open` error branch (`New` default store, `WithConfigFromEnv` STORE=sql, `newSQLiteStore`) — unreachable because the sqlite3/pgx drivers are always registered (blank import). Remaining SQL defensive branches (Scan column-count mismatch, rows iteration errors, BeginTx/query failures, in-tx errors) are also unproducible with the real sqlite3 driver | LOW (test-only) | Add unexported `var sqlOpen = sql.Open` seam at the two call sites (`sqlite.go`, `env.go`) and `TestSQLOpenFailurePaths` swapping it to force failures; add a scripted mock `database/sql` driver (`mock_driver_test.go`, zero new deps) to exercise the SQL defensive branches; core coverage 94.4% → **100.0%** | **Done** (P5.13) |
 
+### 6.4 Bug audit round 3 (2026-08-02, code + dynamic verification)
+
+Line-by-line review of all production files (core + 4 adapters); candidates verified dynamically
+(race detector, mutation probes). Execution tracked in `phases.md` P5.14.
+
+| # | Finding | Severity | Fix | Status |
+| --- | --- | --- | --- | --- |
+| B1 | `memoryStore.GetRole` returns aliases to internal storage: caller mutation corrupts the store (verified: index-write persisted) and concurrent GetRole+mutation trips the race detector; violates the concurrency-safe contract | MEDIUM-HIGH | Return a deep copy (Permissions/Parents slices); regression tests incl. concurrent copy test | **Done** (P5.14) |
+| B2 | Redis cache prefix default `rbacgo:cache:` shared by multiple apps on one Redis → cached permission sets leak across applications (authorization leak) | MEDIUM (docs/ops) | README warning: unique prefix per app/tenant required | **Done** (P5.14) |
+| B3 | `NewRedisLRU(nil, ...)` panics on first use (nil-interface call) instead of failing fast at construction | LOW | Nil-guard with clear panic message + test | **Done** (P5.14) |
+| B4 | Single-connection cap for in-memory SQLite applied only to exact DSN `":memory:"`; `file:memdb1?mode=memory` / `file::memory:` bypass it (per-connection DBs, same R1 symptom) | LOW (edge) | `isMemoryDSN` helper (contains `:memory:` or `mode=memory`) used in `newSQLiteStore` and the env path; variant regression test | **Done** (P5.14) |
+| B5 | Hierarchy traversal is recursive (`collectEffective`, `collectRoleNames`, `checkCycles`, `detectCycle`); pathological deep chains can exhaust the stack | LOW (pathological) | Documented in limitation.md §3 | **Done** (P5.14) |
+| B6 | `validRole` accepted whitespace-only names (`" "`) and whitespace-padded resource/action | LOW | `strings.TrimSpace` validation; test case added | **Done** (P5.14) |
+| B7 | Adapters panic deep inside the request path on a nil `*Enforcer` | LOW | Fail-fast `panic("rbacgo: nil enforcer")` in all 4 constructors + tests | **Done** (P5.14) |
+| B8 | `sqlStore.AssignRole` not transactional (exists-check + 2 inserts) | INFO | Not reachable via public API (no role-delete API); no action | Accepted |
+| B9 | Redis `Flush` SCAN pattern uses the raw prefix; glob metacharacters (`[`, `*`, `?`, `\`) in a prefix would match wrong keys | INFO (edge) | Glob-escape prefix in the SCAN pattern; miniredis regression test | **Done** (P5.14) |
+
 ## 7. Definition of Done
 
 - Core engine test coverage ≥ 80%.

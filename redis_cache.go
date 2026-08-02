@@ -3,6 +3,7 @@ package rbacgo
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,6 +23,9 @@ type redisLRU struct {
 // (*redis.Client, *redis.ClusterClient, ...). Keys are namespaced under
 // prefix to allow safe multi-instance sharing.
 func NewRedisLRU(client redis.Cmdable, prefix string, ttl time.Duration) CacheBackend {
+	if client == nil {
+		panic("rbacgo: nil redis client")
+	}
 	if prefix == "" {
 		prefix = "rbacgo:cache:"
 	}
@@ -62,10 +66,24 @@ func (c *redisLRU) Delete(key string) {
 	_ = c.client.Del(c.ctx, c.key(key)).Err()
 }
 
+// escapeGlob escapes glob metacharacters so a prefix is matched literally
+// when used inside a SCAN pattern.
+func escapeGlob(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\', '*', '?', '[', ']':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func (c *redisLRU) Flush() {
 	var cursor uint64
 	for {
-		keys, next, err := c.client.Scan(c.ctx, cursor, c.prefix+"*", 100).Result()
+		keys, next, err := c.client.Scan(c.ctx, cursor, escapeGlob(c.prefix)+"*", 100).Result()
 		if err != nil {
 			return
 		}

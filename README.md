@@ -242,6 +242,13 @@ enforcer, err := rbacgo.New(
 > that memory usage does not balloon. When memory is a hard constraint, prefer
 > the Redis backend or set `RBAC_CACHE=none`.
 
+> **Redis prefix uniqueness.** Every application (or tenant) that shares one
+> Redis instance **must use its own unique cache prefix**
+> (`NewRedisLRU(..., "myapp:", ...)`). The default prefix is `rbacgo:cache:`
+> (also used by the `RBAC_CACHE=redis` env path); two applications using the
+> same prefix with overlapping user IDs would serve each other's cached
+> permission sets — a cross-application authorization leak.
+
 > **Redis Cluster note.** The Redis LRU cache clears entries with a `SCAN` +
 > `DEL` walk over the configured key prefix (used when a role is re-registered,
 > since the affected users cannot be enumerated cheaply). On Redis **Cluster**,

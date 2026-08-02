@@ -2,6 +2,7 @@ package rbacgo
 
 import (
 	"context"
+	"strings"
 	"sync"
 )
 
@@ -48,7 +49,13 @@ func (s *memoryStore) GetRole(_ context.Context, name string) (Role, bool, error
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	role, ok := s.roles[name]
-	return role, ok, nil
+	if !ok {
+		return Role{}, false, nil
+	}
+	cp := Role{Name: role.Name}
+	cp.Permissions = append([]Permission(nil), role.Permissions...)
+	cp.Parents = append([]string(nil), role.Parents...)
+	return cp, true, nil
 }
 
 func (s *memoryStore) AssignRole(_ context.Context, userID, roleName string) error {
@@ -96,11 +103,11 @@ func detectCycle(roles map[string]Role, roleName string, visiting map[string]boo
 }
 
 func validRole(role Role) bool {
-	if role.Name == "" {
+	if strings.TrimSpace(role.Name) == "" {
 		return false
 	}
 	for _, p := range role.Permissions {
-		if p.Resource == "" || p.Action == "" {
+		if strings.TrimSpace(p.Resource) == "" || strings.TrimSpace(p.Action) == "" {
 			return false
 		}
 	}

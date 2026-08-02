@@ -178,7 +178,25 @@
       paths; core coverage 94.4% → **100.0%**.
 - [x] Re-verify after round-2 fixes: build, vet, full `-race` suite (incl. new concurrent + error-path tests),
       coverage (core 100.0%), `go mod tidy -diff` (6/6), `govulncheck` (exit 0), Postgres 17 integration.
+- [x] Commit + push — done: `4536507` pushed to `main` (R6, 2026-08-02, on explicit request).
+
+### Bug audit round 3 (P5.14, 2026-08-02) — fix all findings
+- [x] **B1** — `memoryStore.GetRole` deep copy (Permissions/Parents) + mutation/concurrent regression tests.
+- [x] **B2** — README: Redis prefix must be unique per app/tenant (cross-app cache leak).
+- [x] **B3** — `NewRedisLRU` nil-client fail-fast panic + test.
+- [x] **B4** — `isMemoryDSN` (covers `:memory:` variants) in `newSQLiteStore` + env path; variant test.
+- [x] **B5** — Recursion-depth limitation documented in limitation.md §3.
+- [x] **B6** — `validRole` rejects whitespace-only names/resource/action; test case added.
+- [x] **B7** — Nil-enforcer fail-fast panic in all 4 adapters + tests.
+- [x] **B8** — Accepted as INFO (AssignRole not transactional; unreachable via public API).
+- [x] **B9** — Redis `Flush` glob-escapes the prefix in the SCAN pattern + miniredis test.
+- [ ] Re-verify after bug audit: build, vet, full `-race` suite (6 modules), coverage, `go mod tidy -diff`,
+      `govulncheck`, Postgres 17 integration.
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
+### Acceptance criteria (round 3)
+- [ ] All B1–B9 closed or explicitly accepted (B8 accepted as INFO); no regressions.
+- [ ] Docs consistent: plan §6.4, phases P5.14, limitation.md, README.
 
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).

@@ -165,3 +165,52 @@ func TestSQLiteMemoryConcurrentAccess(t *testing.T) {
 		t.Errorf(":memory: store opened %d connections, want at most 1", stats.OpenConnections)
 	}
 }
+
+func TestSQLiteMemoryDSNVariantSingleConnection(t *testing.T) {
+	ctx := context.Background()
+	for _, dsn := range []string{":memory:", "file::memory:", "file:memdb1?mode=memory"} {
+		t.Run(dsn, func(t *testing.T) {
+			store := sqliteStore(t, dsn)
+			s, ok := store.(*sqlStore)
+			if !ok {
+				t.Fatalf("newSQLiteStore(%q) returned %T, want *sqlStore", dsn, store)
+			}
+			if err := store.AddRole(ctx, Role{Name: "viewer", Permissions: []Permission{{Resource: "a", Action: "read"}}}); err != nil {
+				t.Fatal(err)
+			}
+			const workers, iters = 16, 10
+			errCh := make(chan error, workers)
+			var wg sync.WaitGroup
+			for w := 0; w < workers; w++ {
+				wg.Add(1)
+				go func(id int) {
+					defer wg.Done()
+					for i := 0; i < iters; i++ {
+						user := fmt.Sprintf("u%d-%d", id, i)
+						if err := store.AssignRole(ctx, user, "viewer"); err != nil {
+							errCh <- err
+							return
+						}
+						roles, err := store.GetRoles(ctx, user)
+						if err != nil {
+							errCh <- err
+							return
+						}
+						if len(roles) != 1 || roles[0] != "viewer" {
+							errCh <- fmt.Errorf("getroles %s = %v, want [viewer]", user, roles)
+							return
+						}
+					}
+				}(w)
+			}
+			wg.Wait()
+			close(errCh)
+			for err := range errCh {
+				t.Error(err)
+			}
+			if stats := s.dbStats(); stats.OpenConnections > 1 {
+				t.Errorf("dsn %q opened %d connections, want at most 1", dsn, stats.OpenConnections)
+			}
+		})
+	}
+}

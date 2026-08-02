@@ -62,6 +62,9 @@ func defaultOptions() Options {
 //
 //	app.Use(fiberadapter.Middleware(enforcer, fiberadapter.WithUserID(...)))
 func Middleware(enforcer *rbacgo.Enforcer, opts ...Option) fiber.Handler {
+	if enforcer == nil {
+		panic("rbacgo: nil enforcer")
+	}
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(&o)

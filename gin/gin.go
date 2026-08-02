@@ -66,6 +66,9 @@ func defaultOptions() Options {
 //	r := gin.New()
 //	r.Use(ginadapter.Middleware(enforcer, ginadapter.WithUserID(...)))
 func Middleware(enforcer *rbacgo.Enforcer, opts ...Option) gin.HandlerFunc {
+	if enforcer == nil {
+		panic("rbacgo: nil enforcer")
+	}
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(&o)

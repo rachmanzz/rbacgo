@@ -39,6 +39,10 @@
   in-memory.
 - **Hierarchy resolution cost** grows with the depth/breadth of the role graph; mitigated
   by caching effective permission sets.
+- **Recursive hierarchy traversal.** `Enforce`/`HasRole` (effective-permission and inherited-role
+  collection), SQL cycle checks (`checkCycles`), and the memory store's `detectCycle` traverse
+  the parent graph recursively. Pathologically deep hierarchies (hundreds of thousands of
+  levels) can exhaust the goroutine stack; keep hierarchies shallow and wide instead.
 - **No auto-reload / hot-swap** of policies from storage without redeploy.
 
 ## 4. Concurrency & performance notes

@@ -65,6 +65,9 @@ func defaultOptions() Options {
 //
 //	e.Use(echoadapter.Middleware(enforcer, echoadapter.WithUserID(...)))
 func Middleware(enforcer *rbacgo.Enforcer, opts ...Option) echo.MiddlewareFunc {
+	if enforcer == nil {
+		panic("rbacgo: nil enforcer")
+	}
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(&o)

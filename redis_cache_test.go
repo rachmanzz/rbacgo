@@ -55,6 +55,37 @@ func TestRedisLRUFlush(t *testing.T) {
 	}
 }
 
+func TestRedisLRUFlushGlobPrefix(t *testing.T) {
+	client := newTestRedisClient(t)
+	c := NewRedisLRU(client, "rbac[go]:cache:", time.Minute)
+	c.Set("u1", permissionSet{"a": {"b": true}})
+	c.Set("u2", permissionSet{"c": {"d": true}})
+	client.Set(context.Background(), "rbacg:other", "keep", 0)
+	client.Set(context.Background(), "unrelated", "keep", 0)
+	c.Flush()
+	if _, ok := c.Get("u1"); ok {
+		t.Fatal("u1 should be gone after flush (literal prefix with glob chars)")
+	}
+	if _, ok := c.Get("u2"); ok {
+		t.Fatal("u2 should be gone after flush")
+	}
+	if v, _ := client.Get(context.Background(), "rbacg:other").Result(); v != "keep" {
+		t.Fatal("key outside the literal prefix must survive flush")
+	}
+	if v, _ := client.Get(context.Background(), "unrelated").Result(); v != "keep" {
+		t.Fatal("unrelated key must survive flush")
+	}
+}
+
+func TestRedisLRUNilClientPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for nil redis client")
+		}
+	}()
+	NewRedisLRU(nil, "x:", time.Minute)
+}
+
 func TestRedisLRUDefaultPrefix(t *testing.T) {
 	client := newTestRedisClient(t)
 	c := NewRedisLRU(client, "", time.Minute)

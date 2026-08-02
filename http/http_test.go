@@ -120,3 +120,12 @@ func TestCustomUnauthorized(t *testing.T) {
 		t.Fatalf("custom unauthorized handler not used: %d %q", rec.Code, rec.Header().Get("X-Unauthorized"))
 	}
 }
+
+func TestNilEnforcerPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for nil enforcer")
+		}
+	}()
+	New(nil)(okHandler())
+}

@@ -3,11 +3,19 @@ package rbacgo
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for the default embedded store
 )
 
 var sqlOpen = sql.Open
+
+// isMemoryDSN reports whether a SQLite DSN refers to an in-memory database.
+// Each connection to such a DSN opens a brand-new empty database unless a
+// shared cache is requested, so the pool must be capped at one connection.
+func isMemoryDSN(dsn string) bool {
+	return strings.Contains(dsn, ":memory:") || strings.Contains(dsn, "mode=memory")
+}
 
 // WithSQLite configures the embedded SQLite store. path may be ":memory:" for
 // an ephemeral database or a file path for persistence. For ":memory:" the
@@ -29,7 +37,7 @@ func newSQLiteStore(path string) (Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rbacgo: open sqlite: %w", err)
 	}
-	if path == ":memory:" {
+	if isMemoryDSN(path) {
 		// Each :memory: connection opens a brand-new, empty database, so the
 		// pool must be capped at one connection to keep concurrent access
 		// consistent.
