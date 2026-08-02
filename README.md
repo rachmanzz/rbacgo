@@ -110,6 +110,41 @@ err := enforcer.RegisterRole(ctx, rbacgo.Role{Name: "admin", Parents: []string{"
 // err == rbacgo.ErrParentNotFound  (parent must be registered first)
 ```
 
+## Role management
+
+Roles can be deleted and unassigned from users. Because these operations are
+privileged, they require the caller to hold a **role-management capability**:
+the permission `("roles", "manage")` by default (override with
+`WithRoleManagementPermission("acl", "manage")`). A caller without the
+capability gets `ErrPermissionDenied`.
+
+```go
+// Only callers holding ("roles", "manage") may run these.
+err := enforcer.DeleteRole(ctx, "admin-user", "editor")
+// ErrRoleInUse  -> editor is still assigned to at least one user
+// ErrPermissionDenied -> caller lacks the role-management capability
+
+err = enforcer.UnassignRole(ctx, "admin-user", "user-123", "editor")
+if err != nil {
+	// ErrRoleNotFound when the role does not exist
+}
+
+err = enforcer.DeleteRole(ctx, "admin-user", "editor") // now succeeds
+```
+
+Rules:
+
+1. **Delete is protected** — a role still assigned to any user cannot be deleted
+   (`ErrRoleInUse`). Unassign it first.
+2. **Deleting a parent cascades** — child roles automatically lose the deleted
+   role from their parent list; their own permissions and assignments remain.
+3. **Cache invalidation** — successful deletions flush the whole lookup cache;
+   unassignments drop the target user's cache entry immediately.
+4. **Store support** — `DeleteRole`/`UnassignRole` are optional store
+   capabilities (`RoleDeleter`/`RoleUnassigner` interfaces). Stores that do not
+   implement them report `ErrUnsupported`, so existing custom stores keep
+   working unchanged.
+
 ## Middleware adapters
 
 All adapters share the same defaults and options: user-ID extraction (default:

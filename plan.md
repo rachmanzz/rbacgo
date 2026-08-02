@@ -164,6 +164,24 @@ Line-by-line review of all production files (core + 4 adapters); candidates veri
 | B8 | `sqlStore.AssignRole` not transactional (exists-check + 2 inserts) | INFO | Not reachable via public API (no role-delete API); no action | Accepted |
 | B9 | Redis `Flush` SCAN pattern uses the raw prefix; glob metacharacters (`[`, `*`, `?`, `\`) in a prefix would match wrong keys | INFO (edge) | Glob-escape prefix in the SCAN pattern; miniredis regression test | **Done** (P5.14) |
 
+### 6.5 Role management API (2026-08-02, feature)
+
+User-requested extension: **DeleteRole** + **UnassignRole**, gated by a
+role-management capability. Design decisions (see decision-log ADR-006):
+
+- Deletion is capability-gated: only callers holding the management permission
+  (default `("roles", "manage")`, configurable via `WithRoleManagementPermission`)
+  may delete/unassign roles; others get `ErrPermissionDenied`.
+- Optional store interfaces `RoleDeleter` / `RoleUnassigner` keep existing
+  custom stores source-compatible; unsupported stores report `ErrUnsupported`.
+- Assigned roles are protected: `DeleteRole` fails with `ErrRoleInUse` until
+  every assignment is removed (unassign first).
+- Deleting a parent role cascades: child roles lose the deleted role from their
+  parent list (own permissions and assignments untouched).
+- Cache semantics: `DeleteRole` flushes the whole lookup cache; `UnassignRole`
+  drops only the target user's entry.
+- Execution tracked in `phases.md` P5.15; core coverage stays 100.0%.
+
 ## 7. Definition of Done
 
 - Core engine test coverage ≥ 80%.

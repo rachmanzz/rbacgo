@@ -57,6 +57,9 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 	ctx := context.Background()
 
+	del := store.(RoleDeleter)
+	unassign := store.(RoleUnassigner)
+
 	viewer := Role{Name: "viewer", Permissions: []Permission{{Resource: "/articles", Action: "GET"}}}
 	editor := Role{
 		Name:        "editor",
@@ -138,5 +141,81 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 	if enforcer.Enforce(ctx, "pg-user", "/articles", "DELETE") {
 		t.Fatal("expected deny for DELETE, got allow")
+	}
+
+	// --- Role management flow: UnassignRole / DeleteRole ---
+
+	if err := unassign.UnassignRole(ctx, "pg-user", "editor"); err != nil {
+		t.Fatalf("UnassignRole: %v", err)
+	}
+	roles, err = store.GetRoles(ctx, "pg-user")
+	if err != nil || len(roles) != 0 {
+		t.Fatalf("roles after unassign = %v, %v; want empty", roles, err)
+	}
+	if err := unassign.UnassignRole(ctx, "pg-user", "editor"); err != nil {
+		t.Fatalf("no-op UnassignRole: %v", err)
+	}
+	if err := unassign.UnassignRole(ctx, "pg-user", "missing"); err != ErrRoleNotFound {
+		t.Fatalf("unassign missing role error = %v, want ErrRoleNotFound", err)
+	}
+
+	if err := del.DeleteRole(ctx, "editor"); err != nil {
+		t.Fatalf("DeleteRole editor: %v", err)
+	}
+	if _, ok, err := store.GetRole(ctx, "editor"); err != nil || ok {
+		t.Fatalf("GetRole deleted editor: ok=%v err=%v, want not found", ok, err)
+	}
+	if err := del.DeleteRole(ctx, "editor"); err != ErrRoleNotFound {
+		t.Fatalf("double DeleteRole error = %v, want ErrRoleNotFound", err)
+	}
+
+	// Assigned roles are protected.
+	if err := store.AssignRole(ctx, "pg-user", "pg-a"); err != nil {
+		t.Fatalf("AssignRole pg-a: %v", err)
+	}
+	if err := del.DeleteRole(ctx, "pg-a"); err != ErrRoleInUse {
+		t.Fatalf("DeleteRole in-use error = %v, want ErrRoleInUse", err)
+	}
+	if err := unassign.UnassignRole(ctx, "pg-user", "pg-a"); err != nil {
+		t.Fatalf("UnassignRole pg-a: %v", err)
+	}
+	if err := del.DeleteRole(ctx, "pg-a"); err != nil {
+		t.Fatalf("DeleteRole pg-a after unassign: %v", err)
+	}
+
+	// Deleting a parent role cascades the parent link out of its children.
+	if err := del.DeleteRole(ctx, "pg-b"); err != nil {
+		t.Fatalf("DeleteRole pg-b: %v", err)
+	}
+	pgc, ok, err := store.GetRole(ctx, "pg-c")
+	if err != nil || !ok {
+		t.Fatalf("GetRole pg-c: ok=%v err=%v", ok, err)
+	}
+	if len(pgc.Parents) != 0 {
+		t.Fatalf("pg-c parents = %v, want empty after pg-b deleted", pgc.Parents)
+	}
+
+	// Capability-gated management via the enforcer.
+	manager := Role{Name: "pg-manager", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}
+	if err := store.AddRole(ctx, manager); err != nil {
+		t.Fatalf("AddRole pg-manager: %v", err)
+	}
+	if err := store.AssignRole(ctx, "pg-admin", "pg-manager"); err != nil {
+		t.Fatalf("AssignRole pg-admin: %v", err)
+	}
+	if err := enforcer.DeleteRole(ctx, "pg-admin", "viewer"); err != nil {
+		t.Fatalf("DeleteRole viewer: %v", err)
+	}
+	if enforcer.Enforce(ctx, "pg-user", "/articles", "GET") {
+		t.Fatal("expected deny after viewer deleted, got allow")
+	}
+	if err := enforcer.DeleteRole(ctx, "pg-user", "pg-c"); err != ErrPermissionDenied {
+		t.Fatalf("DeleteRole by non-manager error = %v, want ErrPermissionDenied", err)
+	}
+	if err := enforcer.UnassignRole(ctx, "pg-admin", "pg-admin", "pg-manager"); err != nil {
+		t.Fatalf("UnassignRole pg-manager: %v", err)
+	}
+	if err := enforcer.DeleteRole(ctx, "pg-admin", "pg-manager"); err != ErrPermissionDenied {
+		t.Fatalf("DeleteRole after losing capability error = %v, want ErrPermissionDenied", err)
 	}
 }

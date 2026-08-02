@@ -24,16 +24,22 @@ func (s *sqlStore) dbStats() sql.DBStats {
 
 // sqlQueries holds the parametrized statements for one dialect.
 type sqlQueries struct {
-	createTables string
-	insertRole   string
-	insertPerm   string
-	insertParent string
-	insertUser   string
-	assignRole   string
-	userRoles    string
-	rolePerms    string
-	roleParents  string
-	roleExists   string
+	createTables      string
+	insertRole        string
+	insertPerm        string
+	insertParent      string
+	insertUser        string
+	assignRole        string
+	userRoles         string
+	rolePerms         string
+	roleParents       string
+	roleExists        string
+	roleInUse         string
+	deleteRole        string
+	deleteRolePerms   string
+	deleteRoleParents string
+	deleteParentLinks string
+	unassignRole      string
 }
 
 type dialect int
@@ -117,6 +123,19 @@ func buildQueries(d dialect) sqlQueries {
 			`SELECT parent_name FROM role_parents WHERE role_name = %s`, p(1)),
 		roleExists: fmt.Sprintf(
 			`SELECT COUNT(*) FROM roles WHERE name = %s`, p(1)),
+		roleInUse: fmt.Sprintf(
+			`SELECT COUNT(*) FROM user_roles WHERE role_name = %s`, p(1)),
+		deleteRole: fmt.Sprintf(
+			`DELETE FROM roles WHERE name = %s`, p(1)),
+		deleteRolePerms: fmt.Sprintf(
+			`DELETE FROM role_permissions WHERE role_name = %s`, p(1)),
+		deleteRoleParents: fmt.Sprintf(
+			`DELETE FROM role_parents WHERE role_name = %s`, p(1)),
+		deleteParentLinks: fmt.Sprintf(
+			`DELETE FROM role_parents WHERE parent_name = %s`, p(1)),
+		unassignRole: fmt.Sprintf(
+			`DELETE FROM user_roles WHERE user_id = %s AND role_name = %s`,
+			p(1), p(2)),
 	}
 }
 
@@ -240,6 +259,65 @@ func (s *sqlStore) GetRoles(ctx context.Context, userID string) ([]string, error
 		roles = append(roles, name)
 	}
 	return roles, rows.Err()
+}
+
+// DeleteRole removes a role atomically: its permissions, parent links, and
+// child parent links are removed together with the role itself. Deleting a
+// role that is still assigned to a user fails with ErrRoleInUse.
+func (s *sqlStore) DeleteRole(ctx context.Context, name string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	exists, err := s.roleExists(ctx, tx, name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrRoleNotFound
+	}
+	inUse, err := s.roleInUse(ctx, tx, name)
+	if err != nil {
+		return err
+	}
+	if inUse {
+		return ErrRoleInUse
+	}
+	// Cascade: remove child links first so child roles never keep a dangling
+	// parent reference.
+	for _, q := range []string{s.sql.deleteParentLinks, s.sql.deleteRoleParents, s.sql.deleteRolePerms, s.sql.deleteRole} {
+		if _, err := tx.ExecContext(ctx, q, name); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// UnassignRole removes a role from a user's assignments. Unassigning a role
+// the user does not hold is a no-op.
+func (s *sqlStore) UnassignRole(ctx context.Context, userID, roleName string) error {
+	ok, err := s.roleExists(ctx, s.db, roleName)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrRoleNotFound
+	}
+	if _, err := s.db.ExecContext(ctx, s.sql.unassignRole, userID, roleName); err != nil {
+		return err
+	}
+	return nil
+}
+
+// roleInUse reports whether any user is currently assigned the role.
+func (s *sqlStore) roleInUse(ctx context.Context, q querrer, name string) (bool, error) {
+	var count int
+	if err := q.QueryRowContext(ctx, s.sql.roleInUse, name).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // checkCycles verifies that roleName is not reachable from itself via parents.

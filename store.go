@@ -18,3 +18,23 @@ type Store interface {
 	// GetRoles returns the names of all roles assigned to a user.
 	GetRoles(ctx context.Context, userID string) ([]string, error)
 }
+
+// RoleDeleter is optionally implemented by stores that support deleting
+// roles. Enforcer.DeleteRole reports ErrUnsupported for stores that do not
+// implement it, so existing stores keep working unchanged.
+type RoleDeleter interface {
+	// DeleteRole removes a role and its metadata. It must return
+	// ErrRoleNotFound when the role does not exist and ErrRoleInUse when the
+	// role is still assigned to at least one user.
+	DeleteRole(ctx context.Context, name string) error
+}
+
+// RoleUnassigner is optionally implemented by stores that support removing a
+// role from a user. Enforcer.UnassignRole reports ErrUnsupported for stores
+// that do not implement it.
+type RoleUnassigner interface {
+	// UnassignRole removes roleName from userID's assignments. It must
+	// return ErrRoleNotFound when the role does not exist; unassigning a
+	// role the user does not hold is a no-op.
+	UnassignRole(ctx context.Context, userID, roleName string) error
+}

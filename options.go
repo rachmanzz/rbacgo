@@ -3,6 +3,7 @@ package rbacgo
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // WithStore sets the persistence backend explicitly.
@@ -43,6 +44,20 @@ func WithLRU(backend CacheBackend) Option {
 			return fmt.Errorf("rbacgo: nil cache backend")
 		}
 		e.cache = backend
+		return nil
+	}
+}
+
+// WithRoleManagementPermission overrides the capability required to manage
+// roles (DeleteRole / UnassignRole). The default is the ("roles", "manage")
+// permission.
+func WithRoleManagementPermission(resource, action string) Option {
+	return func(e *Enforcer) error {
+		if strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
+			return fmt.Errorf("rbacgo: invalid role management permission")
+		}
+		e.manageRes = resource
+		e.manageAct = action
 		return nil
 	}
 }

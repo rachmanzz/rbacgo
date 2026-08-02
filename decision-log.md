@@ -242,3 +242,37 @@ and git operations only on explicit user request.
 ### Consequences
 - Any future work in this repo must honor these constraints.
 - This decision log and all planning docs live in the repo root for traceability.
+
+## ADR-010 — Capability-gated role management (DeleteRole / UnassignRole)
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** plan §6.5, phases P5.15
+
+### Context
+User-requested feature: delete roles and unassign roles from users. Deleting a
+role is privileged, so it must not be callable by arbitrary users.
+
+### Decision
+- Add `Enforcer.DeleteRole(userID, roleName)` and
+  `Enforcer.UnassignRole(userID, targetUserID, roleName)`, both gated by a
+  **role-management capability**: the caller must hold the permission
+  `("roles", "manage")` by default, overridable per-enforcer via
+  `WithRoleManagementPermission(resource, action)`.
+- Capability is checked with the normal enforcement pipeline
+  (`EnforceCtx`), so it composes with hierarchy and caching.
+- Stores opt in through optional interfaces `RoleDeleter` / `RoleUnassigner`;
+  stores that do not implement them return `ErrUnsupported` (backward
+  compatible — no breaking change to `Store`).
+- A role still assigned to any user cannot be deleted (`ErrRoleInUse`);
+  `UnassignRole` must be called first. Deleting a parent role cascades the
+  parent link out of child roles.
+- Cache invalidation: `DeleteRole` flushes all cached permission sets;
+  `UnassignRole` drops only the target user's entry.
+
+### Consequences
+- Role management requires an explicit capability role (e.g. `("roles",
+  "manage")`); without one, all delete/unassign calls return
+  `ErrPermissionDenied`.
+- Custom `Store` implementations continue to compile and work; the new
+  operations simply report `ErrUnsupported` there.

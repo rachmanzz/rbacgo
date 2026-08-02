@@ -15,6 +15,10 @@ type Enforcer struct {
 	store Store
 	env   *envConfig
 	cache CacheBackend
+	// manageRes/manageAct is the capability required for role-management
+	// operations (DeleteRole / UnassignRole). Default: ("roles", "manage").
+	manageRes string
+	manageAct string
 }
 
 // Option configures an Enforcer. Options are applied in order; environment
@@ -25,7 +29,7 @@ type Option func(*Enforcer) error
 // in memory (":memory:"). Supply WithSQLStore / WithSQLite / WithStore /
 // WithConfigFromEnv to customise persistence and WithLRU to enable caching.
 func New(opts ...Option) (*Enforcer, error) {
-	e := &Enforcer{}
+	e := &Enforcer{manageRes: "roles", manageAct: "manage"}
 	for _, opt := range opts {
 		if err := opt(e); err != nil {
 			return nil, err
@@ -69,6 +73,57 @@ func (e *Enforcer) AssignRole(ctx context.Context, userID, roleName string) erro
 		return err
 	}
 	e.dropCache(userID)
+	return nil
+}
+
+// DeleteRole removes a role. Only callers holding the role-management
+// capability (default ("roles", "manage"), see WithRoleManagementPermission)
+// may delete roles; anyone else gets ErrPermissionDenied. Stores that do not
+// implement role deletion report ErrUnsupported. Roles still assigned to a
+// user cannot be deleted (ErrRoleInUse); unassign them first via UnassignRole.
+func (e *Enforcer) DeleteRole(ctx context.Context, userID, roleName string) error {
+	if err := e.requireManagement(ctx, userID); err != nil {
+		return err
+	}
+	d, ok := e.store.(RoleDeleter)
+	if !ok {
+		return ErrUnsupported
+	}
+	if err := d.DeleteRole(ctx, roleName); err != nil {
+		return err
+	}
+	e.flushCache()
+	return nil
+}
+
+// UnassignRole removes a role from targetUserID. Only callers holding the
+// role-management capability may unassign roles; anyone else gets
+// ErrPermissionDenied. Stores that do not implement role unassignment report
+// ErrUnsupported.
+func (e *Enforcer) UnassignRole(ctx context.Context, userID, targetUserID, roleName string) error {
+	if err := e.requireManagement(ctx, userID); err != nil {
+		return err
+	}
+	u, ok := e.store.(RoleUnassigner)
+	if !ok {
+		return ErrUnsupported
+	}
+	if err := u.UnassignRole(ctx, targetUserID, roleName); err != nil {
+		return err
+	}
+	e.dropCache(targetUserID)
+	return nil
+}
+
+// requireManagement enforces the role-management capability on userID.
+func (e *Enforcer) requireManagement(ctx context.Context, userID string) error {
+	ok, err := e.EnforceCtx(ctx, userID, e.manageRes, e.manageAct)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrPermissionDenied
+	}
 	return nil
 }
 

@@ -190,13 +190,42 @@
 - [x] **B7** — Nil-enforcer fail-fast panic in all 4 adapters + tests.
 - [x] **B8** — Accepted as INFO (AssignRole not transactional; unreachable via public API).
 - [x] **B9** — Redis `Flush` glob-escapes the prefix in the SCAN pattern + miniredis test.
-- [ ] Re-verify after bug audit: build, vet, full `-race` suite (6 modules), coverage, `go mod tidy -diff`,
+- [x] Re-verify after bug audit: build, vet, full `-race` suite (6 modules), coverage, `go mod tidy -diff`,
       `govulncheck`, Postgres 17 integration.
-- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+- [x] Commit + push — done: `af5a258` pushed to `main` (round 3, 2026-08-02, on explicit request).
 
 ### Acceptance criteria (round 3)
-- [ ] All B1–B9 closed or explicitly accepted (B8 accepted as INFO); no regressions.
-- [ ] Docs consistent: plan §6.4, phases P5.14, limitation.md, README.
+- [x] All B1–B9 closed or explicitly accepted (B8 accepted as INFO); no regressions.
+- [x] Docs consistent: plan §6.4, phases P5.14, limitation.md, README.
+
+### Role management API (P5.15, 2026-08-02) — DeleteRole / UnassignRole
+
+User-requested feature: delete roles and unassign them from users, gated by a
+role-management capability. Design: plan §6.5, decision-log ADR-006.
+
+- [x] `errors.go`: `ErrPermissionDenied`, `ErrRoleInUse`, `ErrUnsupported`.
+- [x] `store.go`: optional interfaces `RoleDeleter` + `RoleUnassigner` (existing
+      stores keep compiling unchanged; unsupported stores → `ErrUnsupported`).
+- [x] `memory_store.go`: `DeleteRole` (not-found / in-use guards; deletes role and
+      cascades the parent link out of child roles) + `UnassignRole` (not-found guard,
+      idempotent no-op for unheld roles).
+- [x] `sqlstore.go`: transactional `DeleteRole` (roleExists → roleInUse → cascade
+      child links → own parents → permissions → role) + `UnassignRole`; new queries
+      `roleInUse`, `deleteParentLinks`, `deleteRoleParents`, `deleteRolePerms`,
+      `deleteRole`, `unassignRole`.
+- [x] `options.go`: `WithRoleManagementPermission(resource, action)` — default
+      `("roles", "manage")`, blank values rejected.
+- [x] `enforcer.go`: `manageRes`/`manageAct` fields + `requireManagement` gate;
+      `DeleteRole`/`UnassignRole` with cache invalidation (flush / target-user drop).
+- [x] `role_mgmt_test.go`: gate denied / unsupported store / capability-check error,
+      memory-store paths, SQL mock error paths, end-to-end flow with LRU cache,
+      custom permission override; core coverage stays **100.0%**.
+- [x] Postgres 17 integration: `UnassignRole`/`DeleteRole` flows incl. `ErrRoleInUse`,
+      parent-cascade, capability gate, capability loss after delete.
+- [x] README "Role management" section + plan §6.5.
+- [ ] Final verification sweep (build, vet, `-race` 6 modules, coverage, `go mod tidy -diff`,
+      `govulncheck`, Postgres 17 integration).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).

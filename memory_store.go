@@ -82,6 +82,51 @@ func (s *memoryStore) GetRoles(_ context.Context, userID string) ([]string, erro
 	return out, nil
 }
 
+func (s *memoryStore) DeleteRole(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.roles[name]; !ok {
+		return ErrRoleNotFound
+	}
+	for _, assigned := range s.users {
+		for _, r := range assigned {
+			if r == name {
+				return ErrRoleInUse
+			}
+		}
+	}
+	delete(s.roles, name)
+	// Cascade: drop the deleted role from every child role's parent list.
+	for roleName, role := range s.roles {
+		filtered := role.Parents[:0]
+		for _, parent := range role.Parents {
+			if parent != name {
+				filtered = append(filtered, parent)
+			}
+		}
+		role.Parents = filtered
+		s.roles[roleName] = role
+	}
+	return nil
+}
+
+func (s *memoryStore) UnassignRole(_ context.Context, userID, roleName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.roles[roleName]; !ok {
+		return ErrRoleNotFound
+	}
+	roles := s.users[userID]
+	filtered := roles[:0]
+	for _, r := range roles {
+		if r != roleName {
+			filtered = append(filtered, r)
+		}
+	}
+	s.users[userID] = filtered
+	return nil
+}
+
 // detectCycle performs a DFS over the parent graph starting at roleName.
 // A cycle exists if roleName is reachable from itself through its parents.
 func detectCycle(roles map[string]Role, roleName string, visiting map[string]bool) error {
