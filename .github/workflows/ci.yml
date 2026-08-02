@@ -12,13 +12,10 @@ env:
   GOPROXY: https://proxy.golang.org,direct
 
 jobs:
-  test:
-    name: test (${{ matrix.module }})
+  test-core:
+    name: test (core)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [., http, fiber, echo, gin, examples]
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -34,9 +31,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.25.12'
           cache-dependency-path: |
@@ -47,9 +44,52 @@ jobs:
             gin/go.sum
             examples/go.sum
 
-      - name: gofmt
+      - name: gofmt (repo-wide)
         run: |
           if [ -n "$(gofmt -l .)" ]; then gofmt -l .; exit 1; fi
+
+      - name: go.mod tidy
+        working-directory: .
+        run: go mod tidy -diff
+
+      - name: Build
+        working-directory: .
+        run: go build ./...
+
+      - name: Vet
+        working-directory: .
+        run: go vet ./...
+
+      - name: Test (race)
+        working-directory: .
+        run: go test -race -count=1 ./...
+
+      - name: Postgres integration test
+        env:
+          RBAC_TEST_POSTGRES_DSN: postgres://rbac:test@localhost:5432/rbac?sslmode=disable
+        run: go test -tags integration -count=1 -run TestSQLStorePostgres ./...
+
+  test-adapters:
+    name: test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [http, fiber, echo, gin, examples]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.25.12'
+          cache-dependency-path: |
+            go.sum
+            http/go.sum
+            fiber/go.sum
+            echo/go.sum
+            gin/go.sum
+            examples/go.sum
 
       - name: go.mod tidy
         working-directory: ${{ matrix.module }}
@@ -67,19 +107,14 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go test -race -count=1 ./...
 
-      - name: Postgres integration test (core only)
-        if: matrix.module == '.'
-        env:
-          RBAC_TEST_POSTGRES_DSN: postgres://rbac:test@localhost:5432/rbac?sslmode=disable
-        run: go test -tags integration -count=1 -run TestSQLStorePostgres ./...
-
   security:
     name: security (govulncheck)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.25.12'
 
@@ -100,8 +135,9 @@ jobs:
   compliance:
     name: compliance (license + notices + deps)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: LICENSE + THIRD_PARTY_NOTICES present
         run: |
@@ -111,7 +147,7 @@ jobs:
             grep -qi "$name" THIRD_PARTY_NOTICES || { echo "notice missing for $name"; exit 1; }
           done
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.25.12'
 

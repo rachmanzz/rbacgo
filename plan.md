@@ -121,8 +121,8 @@ Reference: full hard audit performed 2026-08-02 on the released `v0.1.0-1` state
 | F2 | README `sqlstore "github.com/rachmanzz/rbacgo" // or the store package` — no `store` subpackage exists | LOW | Remove misleading alias/comment | **Done** (P5.2) |
 | F3 | `examples/go.mod` requires adapters at `v0.0.0` (works only via local `replace`) — inconsistent with pinned-release narrative | LOW | Pin `v0.1.0-1` + keep local replaces; `go mod tidy` | **Done** (P5.3) |
 | F4 | `miniredis` (direct, test-only dep) absent from THIRD_PARTY_NOTICES; CI compliance grep checks only 5 names | LOW | Document policy (runtime deps only) in notices header; optionally extend CI grep (miniredis, pgx) | **Done** (P5.4) — miniredis + pgx now in notices AND CI grep; policy line added |
-| F5 | CI actions pinned to tags (`checkout@v4`, `setup-go@v5`), no `timeout-minutes` | LOW (optional hardening) | Pin to SHA refs; add job timeouts | Deferred (optional) |
-| F6 | Postgres service started for all 6 matrix rows, used only by core | INFO (optional) | Condition service to core row or split job | Deferred (optional) |
+| F5 | CI actions pinned to tags (`checkout@v4`, `setup-go@v5`), no `timeout-minutes` | LOW (optional hardening) | Pin to SHA refs; add job timeouts | **Done** (P5.6) — checkout v4.4.0 + setup-go v5.6.0 pinned to SHA; `timeout-minutes` on all jobs |
+| F6 | Postgres service started for all 6 matrix rows, used only by core | INFO (optional) | Condition service to core row or split job | **Done** (P5.7) — split `test` job into `test-core` (PG service) + `test-adapters` (matrix, no service) |
 | F7 | `gap.md` benchmark figure 147 ns/op vs measured 142.5 ns/op | INFO | None (machine-dependent, still accurate) | Accepted |
 | F8 | Root module indirect deps older than adapters (x/text v0.29.0 vs v0.40.0, x/sync v0.17.0 vs v0.22.0; x/net v0.56.0 vs v0.57.0) | INFO | None (indirect, no vulns, policy is direct-only; re-check at release) | Accepted |
 | F9 | No `.gitignore` in repo | LOW | Add minimal `.gitignore` (binaries, coverage.out, .env, editor dirs) | **Done** (P5.5) |

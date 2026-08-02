@@ -149,16 +149,19 @@
       e.g. miniredis/pgx are direct go.mod deps but not redistributed); extend CI compliance
       grep to miniredis + pgx as a consistency guard.
 - [x] **F9** — Add minimal `.gitignore` (binaries, `coverage.out`, `.env`, editor dirs).
-- [ ] **(optional) F5** — Pin CI actions to SHA refs; add `timeout-minutes` to jobs.
-- [ ] **(optional) F6** — Move Postgres service to the core matrix row only.
+- [x] **(optional) F5** — Pin CI actions to SHA refs; add `timeout-minutes` to jobs.
+      Done: `actions/checkout@v4.4.0` + `actions/setup-go@v5.6.0` pinned to SHA; every job has
+      `timeout-minutes`.
+- [x] **(optional) F6** — Move Postgres service to the core matrix row only.
+      Done: `test` job split into `test-core` (with PG service + integration test) and
+      `test-adapters` (matrix http/fiber/echo/gin/examples, no service); `gofmt` runs once.
 - [x] Re-verify all 6 modules: `go mod tidy -diff`, build, vet, `-race` tests, coverage
       (core ≥ 80%, adapters 100%), `govulncheck` (exit 0; GO-2026-5932 informational only),
       Postgres 17 integration test.
 - [x] Commit + push — **only on explicit user request** (AGENTS.md).
 
 ### Acceptance criteria
-- [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO;
-      F5, F6 = deferred as optional hardening).
+- [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] No regressions; all verification sweeps green.
 - [x] Docs consistent: README, plan §6, phases P5, gap.md, third-party.md.
 - [x] Release tags `v0.1.0-1` remain identical for all publishable files.
