@@ -6,7 +6,7 @@ toolchain go1.25.12
 
 require (
 	github.com/gofiber/fiber/v3 v3.4.0
-	github.com/rachmanzz/rbacgo v0.0.0
+	github.com/rachmanzz/rbacgo v0.1.0-1
 )
 
 require (
@@ -30,5 +30,3 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 )
-
-replace github.com/rachmanzz/rbacgo => ../

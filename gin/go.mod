@@ -4,11 +4,9 @@ go 1.25.7
 
 toolchain go1.25.12
 
-replace github.com/rachmanzz/rbacgo => ../
-
 require (
 	github.com/gin-gonic/gin v1.12.0
-	github.com/rachmanzz/rbacgo v0.0.0-00010101000000-000000000000
+	github.com/rachmanzz/rbacgo v0.1.0-1
 )
 
 require (
