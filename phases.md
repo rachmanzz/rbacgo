@@ -282,8 +282,43 @@ payloads (multi-tab / long-session refresh).
       bump), concurrent reader/mutator race test; core coverage stays
       **100.0%**.
 - [x] README (payload example + FE usage pattern) + plan §6.8 + ADR-014.
-- [ ] Final verification sweep (build, vet, `-race` 6 modules, coverage, `go mod tidy -diff`,
+- [x] Final verification sweep (build, vet, `-race` 6 modules, coverage, `go mod tidy -diff`,
       `govulncheck`, Postgres 17 integration).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
+### shared policy_version for multi-instance (P5.19, 2026-08-02)
+
+User-approved: in-memory `policy_version` cannot keep instances consistent, so
+the version must live in shared storage — SQL (source of truth) **and** Redis —
+exactly as user decided ("policy_version harus ada di db dan redis").
+
+- [x] `store.go`: new optional interface `PolicyVersioner` (`PolicyVersion`,
+      `NextPolicyVersion`) — custom stores may implement it without breaking
+      changes (additive).
+- [x] `sqlstore.go`: `meta` table (`key`/`value`), queries
+      `policyVersion`/`nextPolicyVersion` (INSERT..ON CONFLICT..DO UPDATE
+      table-qualified so Postgres accepts it), both methods on `sqlStore` —
+      shared across every SQL instance on the same database; prefixed tables
+      get a per-prefix `meta`.
+- [x] `redis_policy_version.go` (new): `NewRedisPolicyVersion(client, key)` —
+      dedicated `PolicyVersioner` over Redis `GET`/`INCR` (default key
+      `rbacgo:policy_version`).
+- [x] `options.go`: `WithPolicyVersionStore` (nil → error).
+- [x] `enforcer.go`: `versionSource()` (explicit source wins, else store if it
+      implements `PolicyVersioner`), `bumpPolicyVersion(ctx)` bumps the shared
+      source first and falls back to the local counter on source error
+      (best-effort — never fails an already-committed mutation),
+      `currentPolicyVersion(ctx)` reads the source with local fallback.
+- [x] `policy_version_shared_test.go` (new): SQL meta default (0/4), two
+      SQLite instances over one file share the version, two memory-store
+      instances share one Redis key, default-key + missing-key handling,
+      `WithPolicyVersionStore(nil)`, failing-source error branches (stub
+      `redis.Cmdable`), source-error fallback to local counter.
+- [x] PG17 integration: meta tables added to cleanup; store and a second fresh
+      instance agree on version after enforcer-level mutations.
+- [x] Verification: core 100.0% coverage, `-race -count=3`, gofmt/vet clean,
+      tidy clean, govulncheck clean, PG17 green, adapters green.
+- [x] plan §6.9 + ADR-015.
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
 ### Acceptance criteria

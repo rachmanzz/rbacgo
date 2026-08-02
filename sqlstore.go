@@ -3,6 +3,7 @@ package rbacgo
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -41,6 +42,8 @@ type sqlQueries struct {
 	deleteRoleParents string
 	deleteParentLinks string
 	unassignRole      string
+	policyVersion     string
+	nextPolicyVersion string
 }
 
 type dialect int
@@ -137,6 +140,7 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 	roleParents := tablePrefix + "role_parents"
 	users := tablePrefix + "users"
 	userRoles := tablePrefix + "user_roles"
+	meta := tablePrefix + "meta"
 	return sqlQueries{
 		createTables: strings.Join([]string{
 			`CREATE TABLE IF NOT EXISTS ` + roles + ` (name TEXT PRIMARY KEY)`,
@@ -150,6 +154,7 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 			`CREATE TABLE IF NOT EXISTS ` + userRoles + ` (` +
 				`user_id TEXT NOT NULL, role_name TEXT NOT NULL,` +
 				`PRIMARY KEY (user_id, role_name))`,
+			`CREATE TABLE IF NOT EXISTS ` + meta + ` (key TEXT PRIMARY KEY, value INTEGER NOT NULL)`,
 		}, ";"),
 		insertRole: fmt.Sprintf(`INSERT INTO %s (name) VALUES (%s)`, roles, p(1)),
 		insertPerm: fmt.Sprintf(
@@ -184,6 +189,11 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 		unassignRole: fmt.Sprintf(
 			`DELETE FROM %s WHERE user_id = %s AND role_name = %s`,
 			userRoles, p(1), p(2)),
+		policyVersion: fmt.Sprintf(
+			`SELECT value FROM %s WHERE key = 'policy'`, meta),
+		nextPolicyVersion: fmt.Sprintf(
+			`INSERT INTO %s (key, value) VALUES ('policy', 1) ON CONFLICT(key) DO UPDATE SET value = %s.value + 1 RETURNING %s.value`,
+			meta, meta, meta),
 	}
 }
 
@@ -366,6 +376,27 @@ func (s *sqlStore) roleInUse(ctx context.Context, q querrer, name string) (bool,
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// policyVersion reports the currently committed policy version (0 before any
+// mutation is ever recorded through an Enforcer).
+func (s *sqlStore) PolicyVersion(ctx context.Context) (uint64, error) {
+	var v uint64
+	err := s.db.QueryRowContext(ctx, s.sql.policyVersion).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return v, err
+}
+
+// NextPolicyVersion atomically advances the policy version in the shared meta
+// table and returns the new value. Every Enforcer instance that performs a
+// mutation agrees on the next value, so multi-instance deployments share one
+// version.
+func (s *sqlStore) NextPolicyVersion(ctx context.Context) (uint64, error) {
+	var v uint64
+	err := s.db.QueryRowContext(ctx, s.sql.nextPolicyVersion).Scan(&v)
+	return v, err
 }
 
 // checkCycles verifies that roleName is not reachable from itself via parents.

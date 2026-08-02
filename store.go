@@ -38,3 +38,16 @@ type RoleUnassigner interface {
 	// role the user does not hold is a no-op.
 	UnassignRole(ctx context.Context, userID, roleName string) error
 }
+
+// PolicyVersioner is optionally implemented by stores that persist a shared
+// policy version (e.g. a SQL meta table). Multi-instance deployments agree on
+// one version through the store; stores that do not implement it fall back to
+// a per-Enforcer counter.
+type PolicyVersioner interface {
+	// PolicyVersion returns the currently committed policy version. It must
+	// report 0 when no mutation has ever been recorded.
+	PolicyVersion(ctx context.Context) (uint64, error)
+	// NextPolicyVersion atomically advances the policy version and returns
+	// the new value.
+	NextPolicyVersion(ctx context.Context) (uint64, error)
+}

@@ -39,11 +39,13 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 
 	cleanup := []string{
+		"DROP TABLE IF EXISTS pg2_meta",
 		"DROP TABLE IF EXISTS pg2_user_roles",
 		"DROP TABLE IF EXISTS pg2_users",
 		"DROP TABLE IF EXISTS pg2_role_parents",
 		"DROP TABLE IF EXISTS pg2_role_permissions",
 		"DROP TABLE IF EXISTS pg2_roles",
+		"DROP TABLE IF EXISTS meta",
 		"DROP TABLE IF EXISTS user_roles",
 		"DROP TABLE IF EXISTS users",
 		"DROP TABLE IF EXISTS role_parents",
@@ -244,5 +246,21 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 	if !prefEnforcer.Enforce(ctx, "pg2-user", "/p", "GET") {
 		t.Fatal("expected allow via prefixed tables on Postgres")
+	}
+
+	// The policy version is stored in the shared meta table: both the main
+	// store and a freshly opened second instance agree on it after the
+	// enforcer-level mutations above.
+	vs := store.(PolicyVersioner)
+	v, err := vs.PolicyVersion(ctx)
+	if err != nil || v == 0 {
+		t.Fatalf("store policy version = %d, %v; want > 0 after mutations", v, err)
+	}
+	second, err := NewSQLStore(db)
+	if err != nil {
+		t.Fatalf("NewSQLStore second: %v", err)
+	}
+	if v2, err := second.(PolicyVersioner).PolicyVersion(ctx); err != nil || v2 != v {
+		t.Fatalf("second instance version = %d, %v; want %d", v2, err, v)
 	}
 }

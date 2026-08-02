@@ -37,6 +37,10 @@
   are not visible until TTL expiry unless explicit invalidation is called.
 - **Redis backend** adds a network round-trip on cache misses; cold starts are slower than
   in-memory.
+- **`policy_version` default is in-memory.** Without a shared source (SQL `meta` table via
+  the SQL store, or `NewRedisPolicyVersion` + `WithPolicyVersionStore`), each process keeps
+  its own counter; multi-instance deployments must point every instance at the same shared
+  source for consistent versions.
 - **Hierarchy resolution cost** grows with the depth/breadth of the role graph; mitigated
   by caching effective permission sets.
 - **Recursive hierarchy traversal.** `Enforce`/`HasRole` (effective-permission and inherited-role

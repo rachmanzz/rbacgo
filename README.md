@@ -183,6 +183,27 @@ if (payload.policy_version !== lastVersion) {
 }
 ```
 
+By default the version is held in memory per instance. In multi-instance
+deployments the counter is shared instead, so every instance reports the same
+value for the same policy state:
+
+- **SQL** — the source of truth: `sqlStore` keeps the counter in a `meta`
+  table, so all instances on the same database agree automatically; no extra
+  configuration needed.
+- **Redis** — for deployments already using Redis, point all instances at the
+  same key:
+
+```go
+version := rbacgo.NewRedisPolicyVersion(redisClient, "rbacgo:policy_version")
+enforcer, err := rbacgo.New(
+	rbacgo.WithStore(store),
+	rbacgo.WithPolicyVersionStore(version),
+)
+```
+
+If the shared source is unreachable the enforcer falls back to its local
+counter; version bookkeeping never fails a policy mutation.
+
 The frontend may use this payload to render menus, hide buttons, and guard
 routes — but the backend must still call `Enforce` on every protected action;
 the payload is a UX hint, not a security decision. Identity must come from the

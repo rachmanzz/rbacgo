@@ -357,6 +357,43 @@ error-prone.
   Multi-instance deployment can replace the source of the number later without
   changing the payload contract.
 
+## ADR-015 — shared policy_version (SQL meta + Redis)
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** plan §6.9, phases P5.19
+
+### Context
+ADR-014 kept the counter in-memory per instance. In a multi-instance
+deployment each Enforcer then reports a different `policy_version` for the
+same policy state, defeating change detection. User decision: the version
+must be shared — "policy_version harus ada di db dan redis".
+
+### Decision
+- Introduce optional interface `store.PolicyVersioner` with
+  `PolicyVersion(ctx) (uint64, error)` and
+  `NextPolicyVersion(ctx) (uint64, error)`.
+- `sqlStore` implements it over a `meta` table using
+  `INSERT ... ON CONFLICT(key) DO UPDATE SET value = meta.value + 1 RETURNING meta.value`
+  (table-qualified so Postgres does not reject the column as ambiguous).
+  Every SQL instance on the same database reads the same counter; a per-prefix
+  `meta` table keeps prefixed schemas self-contained.
+- `NewRedisPolicyVersion(client, key)` implements the same interface with
+  Redis `GET`/`INCR` (default key `rbacgo:policy_version`) for deployments
+  already using Redis — the same key shared across instances.
+- `Enforcer` resolution order: explicit `WithPolicyVersionStore` → store if it
+  implements `PolicyVersioner` → local `atomic.Uint64` fallback.
+- Bumping is best-effort: the shared source is bumped first, but a source
+  error silently falls back to the local counter — a committed policy mutation
+  must never fail because of version bookkeeping. Reads also fall back to the
+  local counter so `PermissionView` never errors on a transient source failure.
+- The earlier idea of mirroring the counter through the generic Redis LRU
+  cache was rejected: `redisLRU.Get` unmarshals into `permissionSet` only and
+  `Flush` clears every key, so the dedicated `RedisPolicyVersion` is used
+  instead.
+- Contract unchanged: the JSON still exposes one `policy_version` number.
+
+
 ### Consequences
 - FE change detection becomes trivial and reliable; multi-tab staleness is
   detectable without polling.

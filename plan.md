@@ -222,9 +222,28 @@ User-approved: FE-friendly policy change detection for `PermissionView`:
 - Stored as `atomic.Uint64` in the Enforcer (concurrency-safe); FE compares
   the number across snapshots and re-renders only on change.
 - In-memory counter = consistent for the instance serving the endpoint;
-  multi-instance consistency is out of scope (contract unchanged, the source
-  of the number can be swapped later without changing the JSON).
+  multi-instance consistency is solved by §6.9 (shared source) without
+  changing the JSON contract.
 - Execution tracked in `phases.md` P5.18; decision-log ADR-014.
+
+### 6.9 shared policy_version for multi-instance (2026-08-02, feature)
+
+User-approved ("policy_version harus ada di db dan redis"): the counter must
+be consistent across instances, so it lives in shared storage:
+
+- New optional interface `store.PolicyVersioner` (`PolicyVersion(ctx)`,
+  `NextPolicyVersion(ctx)`); `sqlStore` implements it over a `meta` table
+  (one row per `policy_version`), so every SQL instance on the same database
+  shares one counter (per table-prefix).
+- New `NewRedisPolicyVersion(client, key)` (default key `rbacgo:policy_version`)
+  implements it over Redis `GET`/`INCR` for deployments that use Redis.
+- `Enforcer` picks its source via `WithPolicyVersionStore`, otherwise the
+  store when it implements `PolicyVersioner`, and falls back to the local
+  in-memory counter whenever the shared source errors (best-effort bump;
+  a committed mutation never fails because of the version bookkeeping).
+- API additive: custom stores that do not implement `PolicyVersioner` keep
+  working unchanged (local counter).
+- Execution tracked in `phases.md` P5.19; decision-log ADR-015.
 
 ## 7. Definition of Done
 

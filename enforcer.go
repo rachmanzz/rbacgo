@@ -21,10 +21,13 @@ type Enforcer struct {
 	// operations (DeleteRole / UnassignRole). Default: ("roles", "manage").
 	manageRes string
 	manageAct string
-	// policyVersion increments on every policy mutation (role registration,
-	// assignment, unassignment, deletion). Frontends compare it across
-	// PermissionView snapshots to detect changes without diffing payloads.
+	// policyVersion falls back to this local counter when no shared version
+	// source is available (plain in-memory deployments).
 	policyVersion atomic.Uint64
+	// policySource overrides the shared policy-version source (e.g. a
+	// RedisPolicyVersion). Defaults to the store when it implements
+	// PolicyVersioner (SQL meta table).
+	policySource PolicyVersioner
 }
 
 // Option configures an Enforcer. Options are applied in order; environment
@@ -58,7 +61,7 @@ func (e *Enforcer) RegisterRole(ctx context.Context, role Role) error {
 	if err := e.store.AddRole(ctx, role); err != nil {
 		return err
 	}
-	e.bumpPolicyVersion()
+	e.bumpPolicyVersion(ctx)
 	e.flushCache()
 	return nil
 }
@@ -79,7 +82,7 @@ func (e *Enforcer) AssignRole(ctx context.Context, userID, roleName string) erro
 	if err := e.store.AssignRole(ctx, userID, roleName); err != nil {
 		return err
 	}
-	e.bumpPolicyVersion()
+	e.bumpPolicyVersion(ctx)
 	e.dropCache(userID)
 	return nil
 }
@@ -100,7 +103,7 @@ func (e *Enforcer) DeleteRole(ctx context.Context, userID, roleName string) erro
 	if err := d.DeleteRole(ctx, roleName); err != nil {
 		return err
 	}
-	e.bumpPolicyVersion()
+	e.bumpPolicyVersion(ctx)
 	e.flushCache()
 	return nil
 }
@@ -120,7 +123,7 @@ func (e *Enforcer) UnassignRole(ctx context.Context, userID, targetUserID, roleN
 	if err := u.UnassignRole(ctx, targetUserID, roleName); err != nil {
 		return err
 	}
-	e.bumpPolicyVersion()
+	e.bumpPolicyVersion(ctx)
 	e.dropCache(targetUserID)
 	return nil
 }
@@ -137,9 +140,45 @@ func (e *Enforcer) requireManagement(ctx context.Context, userID string) error {
 	return nil
 }
 
+// versionSource returns the shared policy-version source for this enforcer:
+// an explicitly configured one, else the store's when it persists a version.
+// It returns nil for stores without a version (fall back to the local
+// counter, correct for single-instance deployments).
+func (e *Enforcer) versionSource() PolicyVersioner {
+	if e.policySource != nil {
+		return e.policySource
+	}
+	if vs, ok := e.store.(PolicyVersioner); ok {
+		return vs
+	}
+	return nil
+}
+
 // bumpPolicyVersion advances the policy version after a successful mutation.
-func (e *Enforcer) bumpPolicyVersion() {
-	e.policyVersion.Add(1)
+// The shared source (store meta table or RedisPolicyVersion) is the source of
+// truth; the local counter mirrors the latest value and is the fallback when
+// no source is available. The bump is best-effort and never fails an
+// already-committed mutation.
+func (e *Enforcer) bumpPolicyVersion(ctx context.Context) {
+	n := e.policyVersion.Add(1)
+	if vs := e.versionSource(); vs != nil {
+		if v, err := vs.NextPolicyVersion(ctx); err == nil {
+			n = v
+			e.policyVersion.Store(n)
+		}
+	}
+}
+
+// currentPolicyVersion returns the version to report for a permission
+// snapshot: from the shared source when available, else the local counter.
+func (e *Enforcer) currentPolicyVersion(ctx context.Context) uint64 {
+	if vs := e.versionSource(); vs != nil {
+		if v, err := vs.PolicyVersion(ctx); err == nil {
+			e.policyVersion.Store(v)
+			return v
+		}
+	}
+	return e.policyVersion.Load()
 }
 
 // Enforce reports whether userID may perform action on resource, considering
@@ -191,7 +230,7 @@ func (e *Enforcer) PermissionView(ctx context.Context, userID string) (Permissio
 		UserID:        userID,
 		Roles:         roles,
 		Permissions:   perms,
-		PolicyVersion: e.policyVersion.Load(),
+		PolicyVersion: e.currentPolicyVersion(ctx),
 	}, nil
 }
 

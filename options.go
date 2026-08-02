@@ -61,3 +61,18 @@ func WithRoleManagementPermission(resource, action string) Option {
 		return nil
 	}
 }
+
+// WithPolicyVersionStore sets the shared policy-version source explicitly
+// (e.g. NewRedisPolicyVersion for multi-instance deployments that want the
+// version in Redis). Defaults to the store itself when it implements
+// PolicyVersioner — the SQL store's meta table — and to a per-instance
+// counter otherwise.
+func WithPolicyVersionStore(vs PolicyVersioner) Option {
+	return func(e *Enforcer) error {
+		if vs == nil {
+			return fmt.Errorf("rbacgo: nil policy version store")
+		}
+		e.policySource = vs
+		return nil
+	}
+}
