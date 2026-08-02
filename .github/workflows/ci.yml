@@ -107,7 +107,7 @@ jobs:
         run: |
           test -f LICENSE || { echo "LICENSE missing"; exit 1; }
           test -f THIRD_PARTY_NOTICES || { echo "THIRD_PARTY_NOTICES missing"; exit 1; }
-          for name in go-sqlite3 go-redis fiber echo gin; do
+          for name in go-sqlite3 go-redis miniredis pgx fiber echo gin; do
             grep -qi "$name" THIRD_PARTY_NOTICES || { echo "notice missing for $name"; exit 1; }
           done
 

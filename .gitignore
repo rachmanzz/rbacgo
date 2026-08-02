@@ -1,0 +1,25 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.a
+*.test
+*.out
+
+# Coverage
+coverage.out
+coverage.html
+
+# Local environment / secrets
+.env
+*.env
+.env.local
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Go workspace / local overrides
+go.work
+go.work.sum

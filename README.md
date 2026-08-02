@@ -91,13 +91,23 @@ func main() {
 ## Role hierarchy & cycle detection
 
 Roles may declare parent roles. The engine resolves the transitive closure when
-checking permissions and rejects graphs that contain a cycle (e.g.
-`admin -> editor -> admin`) at registration time.
+checking permissions. Two rules keep the hierarchy acyclic:
+
+1. **Parents must already exist** — a role referencing a missing parent is rejected
+   with `ErrParentNotFound`.
+2. **Roles are immutable** — there is no role-update API, so a registered role's
+   parents can never be rewired.
+
+Together these make cycles *structurally impossible* through the public API. The
+engine still ships a defensive cycle check (`detectCycle` in `memory_store.go` /
+`checkCycles` in `sqlstore.go`) that guards the stores against direct manipulation.
 
 ```go
-enforcer.RegisterRole(ctx, rbacgo.Role{Name: "admin", Parents: []string{"editor"}})
-err := enforcer.RegisterRole(ctx, rbacgo.Role{Name: "editor", Parents: []string{"admin"}})
-// err == rbacgo.ErrCycleDetected
+if err := enforcer.RegisterRole(ctx, rbacgo.Role{Name: "viewer"}); err != nil {
+	panic(err)
+}
+err := enforcer.RegisterRole(ctx, rbacgo.Role{Name: "admin", Parents: []string{"missing"}})
+// err == rbacgo.ErrParentNotFound  (parent must be registered first)
 ```
 
 ## Middleware adapters
@@ -178,7 +188,8 @@ implementing `database/sql`.
 import (
 	"database/sql"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	sqlstore "github.com/rachmanzz/rbacgo" // or the store package
+
+	"github.com/rachmanzz/rbacgo"
 )
 
 db, _ := sql.Open("pgx", "postgres://user:pass@localhost/db")

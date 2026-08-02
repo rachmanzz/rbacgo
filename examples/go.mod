@@ -9,10 +9,10 @@ require (
 	github.com/gofiber/fiber/v3 v3.4.0
 	github.com/labstack/echo/v5 v5.3.1
 	github.com/rachmanzz/rbacgo v0.1.0-1
-	github.com/rachmanzz/rbacgo/echo v0.0.0
-	github.com/rachmanzz/rbacgo/fiber v0.0.0
-	github.com/rachmanzz/rbacgo/gin v0.0.0
-	github.com/rachmanzz/rbacgo/http v0.0.0
+	github.com/rachmanzz/rbacgo/echo v0.1.0-1
+	github.com/rachmanzz/rbacgo/fiber v0.1.0-1
+	github.com/rachmanzz/rbacgo/gin v0.1.0-1
+	github.com/rachmanzz/rbacgo/http v0.1.0-1
 )
 
 require (

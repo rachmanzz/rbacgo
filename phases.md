@@ -16,7 +16,8 @@
 | P2 | LRU Cache Layer | Cache abstraction, in-memory + Redis backends | plan M2 |
 | P3 | Adapters | stdlib http, Fiber v3, Echo v5, Gin v1 middlewares | plan M3 |
 | P4 | Examples, Docs & Release | Runnable examples, README, godoc, version tags | plan M4 |
-| P5 | Post-v1 Extensions | Wildcards, ABAC, auto-reload (future) | PRD §10, §11 |
+| P5 | Hard Audit Remediation | Close all LOW findings from the 2026-08-02 hard audit | plan §6 |
+| P6 | Post-v1 Extensions | Wildcards, ABAC, auto-reload (future) | PRD §10, §11 |
 
 ---
 
@@ -132,7 +133,39 @@
 
 ---
 
-## P5 — Post-v1 Extensions (future)
+## P5 — Hard Audit Remediation (v0.1.0-1)
+
+**Reference:** plan §6 (hard audit 2026-08-02); AGENTS.md guards.
+**Goal:** Close every LOW finding; keep changes additive-only; re-verify the release state.
+
+### Tasks
+- [x] **F1** — Rewrite README "Role hierarchy & cycle detection" example: `ErrParentNotFound`
+      fires first when a parent is missing (both stores); `ErrCycleDetected` is a defensive
+      path that cannot be reached through the public API (no role-update API).
+- [x] **F2** — README: remove misleading `sqlstore "github.com/rachmanzz/rbacgo" // or the
+      store package` (no `store` subpackage exists).
+- [x] **F3** — `examples/go.mod`: pin adapters to `v0.1.0-1`, keep local `replace`; `go mod tidy`.
+- [x] **F4** — `THIRD_PARTY_NOTICES`: add explicit policy line (test-only deps excluded,
+      e.g. miniredis/pgx are direct go.mod deps but not redistributed); extend CI compliance
+      grep to miniredis + pgx as a consistency guard.
+- [x] **F9** — Add minimal `.gitignore` (binaries, `coverage.out`, `.env`, editor dirs).
+- [ ] **(optional) F5** — Pin CI actions to SHA refs; add `timeout-minutes` to jobs.
+- [ ] **(optional) F6** — Move Postgres service to the core matrix row only.
+- [x] Re-verify all 6 modules: `go mod tidy -diff`, build, vet, `-race` tests, coverage
+      (core ≥ 80%, adapters 100%), `govulncheck` (exit 0; GO-2026-5932 informational only),
+      Postgres 17 integration test.
+- [x] Commit + push — **only on explicit user request** (AGENTS.md).
+
+### Acceptance criteria
+- [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO;
+      F5, F6 = deferred as optional hardening).
+- [x] No regressions; all verification sweeps green.
+- [x] Docs consistent: README, plan §6, phases P5, gap.md, third-party.md.
+- [x] Release tags `v0.1.0-1` remain identical for all publishable files.
+
+---
+
+## P6 — Post-v1 Extensions (future)
 
 **Reference:** PRD §10 Future, §11; limitation §1; decision-log ADR-004.
 
