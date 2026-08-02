@@ -198,6 +198,20 @@ framework-agnostic JSON snapshot (`Enforcer.PermissionView`):
   from the session, not the request body.
 - Execution tracked in `phases.md` P5.16; decision-log ADR-011.
 
+### 6.7 SQL table prefix (2026-08-02, feature)
+
+User-requested: namespace SQL tables per application/tenant sharing one DB
+(mirrors the Redis key prefix):
+
+- `WithTablePrefix(prefix)` SQLStoreOption — validated identifier fragment
+  (letters/digits/underscore, no leading digit; empty = default names).
+- Applied via `NewSQLStore(db, opts...)` / `WithSQLStore(db, opts...)`
+  (variadic, backward compatible) and `RBAC_SQL_TABLE_PREFIX` env var.
+- All 5 tables (`roles`, `role_permissions`, `role_parents`, `users`,
+  `user_roles`) and every query are built from the prefix; migration creates
+  the prefixed tables.
+- Execution tracked in `phases.md` P5.17; decision-log ADR-013.
+
 ## 7. Definition of Done
 
 - Core engine test coverage ≥ 80%.

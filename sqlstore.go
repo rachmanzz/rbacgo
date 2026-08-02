@@ -12,9 +12,10 @@ import (
 // (via the pgx stdlib adapter), go-sqlite3, or any other driver. Only SQLite
 // and PostgreSQL dialects are officially supported.
 type sqlStore struct {
-	db  *sql.DB
-	ph  func(n int) string // placeholder generator for the active dialect
-	sql sqlQueries
+	db          *sql.DB
+	ph          func(n int) string // placeholder generator for the active dialect
+	sql         sqlQueries
+	tablePrefix string
 }
 
 // dbStats exposes database/sql pool statistics for tests.
@@ -68,17 +69,59 @@ func (d dialect) param(i int) string {
 
 // NewSQLStore builds a Store on top of an existing *sql.DB. It runs the schema
 // migration immediately and detects the SQL dialect (SQLite vs PostgreSQL)
-// automatically.
-func NewSQLStore(db *sql.DB) (Store, error) {
+// automatically. SQLStoreOptions (e.g. WithTablePrefix) may customize the
+// store.
+func NewSQLStore(db *sql.DB, opts ...SQLStoreOption) (Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("rbacgo: nil *sql.DB")
 	}
 	d := detectDialect(db)
-	s := &sqlStore{db: db, ph: d.param, sql: buildQueries(d)}
+	s := &sqlStore{db: db, ph: d.param}
+	for _, opt := range opts {
+		if err := opt(s); err != nil {
+			return nil, err
+		}
+	}
+	s.sql = buildQueries(d, s.tablePrefix)
 	if err := s.migrate(); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// SQLStoreOption configures a SQL store built by NewSQLStore.
+type SQLStoreOption func(*sqlStore) error
+
+// WithTablePrefix namespaces every SQL table behind prefix (e.g. "myapp_").
+// Use it when multiple applications or tenants share one database, so their
+// tables do not collide. An empty prefix is allowed and keeps the default
+// table names.
+func WithTablePrefix(prefix string) SQLStoreOption {
+	return func(s *sqlStore) error {
+		if !validTablePrefix(prefix) {
+			return fmt.Errorf("rbacgo: invalid table prefix %q (letters, digits and underscore only; must not start with a digit)", prefix)
+		}
+		s.tablePrefix = prefix
+		return nil
+	}
+}
+
+// validTablePrefix reports whether prefix is empty or a safe SQL identifier
+// fragment: it must not start with a digit (unquoted identifiers cannot).
+func validTablePrefix(prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	if prefix[0] >= '0' && prefix[0] <= '9' {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		c := prefix[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *sqlStore) migrate() error {
@@ -86,56 +129,61 @@ func (s *sqlStore) migrate() error {
 	return err
 }
 
-func buildQueries(d dialect) sqlQueries {
+func buildQueries(d dialect, tablePrefix string) sqlQueries {
 	p := d.param
 	noConflict := "ON CONFLICT DO NOTHING"
+	roles := tablePrefix + "roles"
+	rolePerms := tablePrefix + "role_permissions"
+	roleParents := tablePrefix + "role_parents"
+	users := tablePrefix + "users"
+	userRoles := tablePrefix + "user_roles"
 	return sqlQueries{
 		createTables: strings.Join([]string{
-			`CREATE TABLE IF NOT EXISTS roles (name TEXT PRIMARY KEY)`,
-			`CREATE TABLE IF NOT EXISTS role_permissions (` +
+			`CREATE TABLE IF NOT EXISTS ` + roles + ` (name TEXT PRIMARY KEY)`,
+			`CREATE TABLE IF NOT EXISTS ` + rolePerms + ` (` +
 				`role_name TEXT NOT NULL, resource TEXT NOT NULL, action TEXT NOT NULL,` +
 				`PRIMARY KEY (role_name, resource, action))`,
-			`CREATE TABLE IF NOT EXISTS role_parents (` +
+			`CREATE TABLE IF NOT EXISTS ` + roleParents + ` (` +
 				`role_name TEXT NOT NULL, parent_name TEXT NOT NULL,` +
 				`PRIMARY KEY (role_name, parent_name))`,
-			`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY)`,
-			`CREATE TABLE IF NOT EXISTS user_roles (` +
+			`CREATE TABLE IF NOT EXISTS ` + users + ` (id TEXT PRIMARY KEY)`,
+			`CREATE TABLE IF NOT EXISTS ` + userRoles + ` (` +
 				`user_id TEXT NOT NULL, role_name TEXT NOT NULL,` +
 				`PRIMARY KEY (user_id, role_name))`,
 		}, ";"),
-		insertRole: fmt.Sprintf(`INSERT INTO roles (name) VALUES (%s)`, p(1)),
+		insertRole: fmt.Sprintf(`INSERT INTO %s (name) VALUES (%s)`, roles, p(1)),
 		insertPerm: fmt.Sprintf(
-			`INSERT INTO role_permissions (role_name, resource, action) VALUES (%s, %s, %s) %s`,
-			p(1), p(2), p(3), noConflict),
+			`INSERT INTO %s (role_name, resource, action) VALUES (%s, %s, %s) %s`,
+			rolePerms, p(1), p(2), p(3), noConflict),
 		insertParent: fmt.Sprintf(
-			`INSERT INTO role_parents (role_name, parent_name) VALUES (%s, %s) %s`,
-			p(1), p(2), noConflict),
+			`INSERT INTO %s (role_name, parent_name) VALUES (%s, %s) %s`,
+			roleParents, p(1), p(2), noConflict),
 		insertUser: fmt.Sprintf(
-			`INSERT INTO users (id) VALUES (%s) %s`, p(1), noConflict),
+			`INSERT INTO %s (id) VALUES (%s) %s`, users, p(1), noConflict),
 		assignRole: fmt.Sprintf(
-			`INSERT INTO user_roles (user_id, role_name) VALUES (%s, %s) %s`,
-			p(1), p(2), noConflict),
+			`INSERT INTO %s (user_id, role_name) VALUES (%s, %s) %s`,
+			userRoles, p(1), p(2), noConflict),
 		userRoles: fmt.Sprintf(
-			`SELECT role_name FROM user_roles WHERE user_id = %s`, p(1)),
+			`SELECT role_name FROM %s WHERE user_id = %s`, userRoles, p(1)),
 		rolePerms: fmt.Sprintf(
-			`SELECT resource, action FROM role_permissions WHERE role_name = %s`, p(1)),
+			`SELECT resource, action FROM %s WHERE role_name = %s`, rolePerms, p(1)),
 		roleParents: fmt.Sprintf(
-			`SELECT parent_name FROM role_parents WHERE role_name = %s`, p(1)),
+			`SELECT parent_name FROM %s WHERE role_name = %s`, roleParents, p(1)),
 		roleExists: fmt.Sprintf(
-			`SELECT COUNT(*) FROM roles WHERE name = %s`, p(1)),
+			`SELECT COUNT(*) FROM %s WHERE name = %s`, roles, p(1)),
 		roleInUse: fmt.Sprintf(
-			`SELECT COUNT(*) FROM user_roles WHERE role_name = %s`, p(1)),
+			`SELECT COUNT(*) FROM %s WHERE role_name = %s`, userRoles, p(1)),
 		deleteRole: fmt.Sprintf(
-			`DELETE FROM roles WHERE name = %s`, p(1)),
+			`DELETE FROM %s WHERE name = %s`, roles, p(1)),
 		deleteRolePerms: fmt.Sprintf(
-			`DELETE FROM role_permissions WHERE role_name = %s`, p(1)),
+			`DELETE FROM %s WHERE role_name = %s`, rolePerms, p(1)),
 		deleteRoleParents: fmt.Sprintf(
-			`DELETE FROM role_parents WHERE role_name = %s`, p(1)),
+			`DELETE FROM %s WHERE role_name = %s`, roleParents, p(1)),
 		deleteParentLinks: fmt.Sprintf(
-			`DELETE FROM role_parents WHERE parent_name = %s`, p(1)),
+			`DELETE FROM %s WHERE parent_name = %s`, roleParents, p(1)),
 		unassignRole: fmt.Sprintf(
-			`DELETE FROM user_roles WHERE user_id = %s AND role_name = %s`,
-			p(1), p(2)),
+			`DELETE FROM %s WHERE user_id = %s AND role_name = %s`,
+			userRoles, p(1), p(2)),
 	}
 }
 

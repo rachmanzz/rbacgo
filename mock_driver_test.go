@@ -131,7 +131,7 @@ func newMockSQLStore(steps ...mockStep) *sqlStore {
 	return &sqlStore{
 		db:  mockDB(steps...),
 		ph:  dialectSQLite.param,
-		sql: buildQueries(dialectSQLite),
+		sql: buildQueries(dialectSQLite, ""),
 	}
 }
 
@@ -182,7 +182,7 @@ func TestCheckCyclesMockErrors(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("scan error", func(t *testing.T) {
-		s := &sqlStore{sql: buildQueries(dialectSQLite)}
+		s := &sqlStore{sql: buildQueries(dialectSQLite, "")}
 		db := mockDB(mockStep{cols: 3, rows: 1, val: "x"})
 		if err := s.checkCycles(ctx, db, "a"); err == nil {
 			t.Error("expected scan error")
@@ -190,7 +190,7 @@ func TestCheckCyclesMockErrors(t *testing.T) {
 	})
 
 	t.Run("rows iteration error", func(t *testing.T) {
-		s := &sqlStore{sql: buildQueries(dialectSQLite)}
+		s := &sqlStore{sql: buildQueries(dialectSQLite, "")}
 		db := mockDB(mockStep{cols: 1, rows: 1, stepErr: errTest})
 		if err := s.checkCycles(ctx, db, "a"); !errors.Is(err, errTest) {
 			t.Fatalf("checkCycles = %v, want rows iteration error", err)
@@ -269,7 +269,7 @@ func TestSQLStoreGetRoleParentsQueryError(t *testing.T) {
 
 func TestSQLStoreCheckCyclesDetectsCycle(t *testing.T) {
 	ctx := context.Background()
-	s := &sqlStore{sql: buildQueries(dialectSQLite)}
+	s := &sqlStore{sql: buildQueries(dialectSQLite, "")}
 	// a -> b -> a forms a cycle: the inner visit of "a" observes it already
 	// being visited, so its parent query is never issued.
 	db := mockDB(

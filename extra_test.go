@@ -130,7 +130,7 @@ func TestRegisterRolesStopsOnError(t *testing.T) {
 }
 
 func TestPostgresDialectQueries(t *testing.T) {
-	q := buildQueries(dialectPostgres)
+	q := buildQueries(dialectPostgres, "")
 	if q.insertRole != "INSERT INTO roles (name) VALUES ($1)" {
 		t.Errorf("unexpected insertRole: %q", q.insertRole)
 	}

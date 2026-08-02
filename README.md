@@ -261,6 +261,20 @@ db, _ := sql.Open("pgx", "postgres://user:pass@localhost/db")
 enforcer, err := rbacgo.New(rbacgo.WithSQLStore(db))
 ```
 
+**Table prefix for shared databases** — when multiple applications or tenants
+share one database, namespace the tables with `WithTablePrefix` so they do not
+collide:
+
+```go
+enforcer, err := rbacgo.New(rbacgo.WithSQLStore(db, rbacgo.WithTablePrefix("myapp_")))
+// tables: myapp_roles, myapp_role_permissions, myapp_role_parents,
+//         myapp_users, myapp_user_roles
+```
+
+The prefix must be a safe identifier fragment (letters, digits, underscore;
+not starting with a digit); an empty prefix keeps the default names. The env
+path supports the same via `RBAC_SQL_TABLE_PREFIX` (STORE=sql only).
+
 ### Embedded SQLite (default)
 
 ```go

@@ -304,3 +304,30 @@ HTTP responses.
 - Apps implement their own HTTP handler (one `Encode` call) on top of
   `PermissionView`; the library stays framework-free.
 - Frontend logic must never be treated as an authorization decision.
+
+## ADR-013 — SQL table prefix (WithTablePrefix)
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** plan §6.7, phases P5.17
+
+### Context
+Multiple applications or tenants sharing one database collide on the fixed
+table names (roles, role_permissions, ...). The Redis cache already supports a
+key prefix; the SQL store did not.
+
+### Decision
+- Add `SQLStoreOption` with `WithTablePrefix(prefix)`; applied through
+  variadic `NewSQLStore(db, opts...)` and `WithSQLStore(db, opts...)`
+  (backward compatible — existing call sites unchanged) and the
+  `RBAC_SQL_TABLE_PREFIX` env var (STORE=sql only).
+- The prefix is validated as a safe identifier fragment (letters, digits,
+  underscore; must not start with a digit) because it is interpolated into
+  SQL as a table-name identifier; empty prefix keeps the default names.
+- All queries and the schema migration are built from the prefixed names.
+
+### Consequences
+- Table-name collisions are solved per store, keeping the store API and
+  `Store` interface untouched.
+- Invalid prefixes fail fast at construction (or env-config time), before any
+  SQL runs.

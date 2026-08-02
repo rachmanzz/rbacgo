@@ -272,7 +272,7 @@ func closedSQLStore(t *testing.T) *sqlStore {
 		t.Fatal(err)
 	}
 	db.Close()
-	return &sqlStore{db: db, ph: dialectSQLite.param, sql: buildQueries(dialectSQLite)}
+	return &sqlStore{db: db, ph: dialectSQLite.param, sql: buildQueries(dialectSQLite, "")}
 }
 
 func TestSQLStoreClosedDBErrorPaths(t *testing.T) {
@@ -384,7 +384,7 @@ func TestSQLStoreDropTableErrorPaths(t *testing.T) {
 }
 
 func TestCheckCyclesQueryError(t *testing.T) {
-	s := &sqlStore{sql: buildQueries(dialectSQLite)}
+	s := &sqlStore{sql: buildQueries(dialectSQLite, "")}
 	if err := s.checkCycles(context.Background(), errQuerier{}, "a"); err == nil {
 		t.Fatal("expected query error")
 	}

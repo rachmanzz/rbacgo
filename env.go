@@ -41,6 +41,7 @@ func WithEnvPrefix(prefix string) Option {
 //	RBAC_STORE           sqlite | sql | memory                 (default sqlite)
 //	RBAC_SQLITE_PATH     SQLite DSN / file path                (default ":memory:")
 //	RBAC_DATABASE_URL    connection URL for STORE=sql
+//	RBAC_SQL_TABLE_PREFIX SQL table name prefix for STORE=sql   (default none)
 //	RBAC_CACHE           memory | redis | none                 (default memory)
 //	RBAC_CACHE_CAPACITY  LRU capacity                          (default 1024)
 //	RBAC_CACHE_TTL       cache TTL (Go duration, e.g. 5m)      (default 5m)
@@ -84,7 +85,11 @@ func WithConfigFromEnv() Option {
 					db.SetMaxOpenConns(1)
 					db.SetMaxIdleConns(1)
 				}
-				if err := WithSQLStore(db)(e); err != nil {
+				var sqlOpts []SQLStoreOption
+				if tablePrefix := envString(prefix+"SQL_TABLE_PREFIX", ""); tablePrefix != "" {
+					sqlOpts = append(sqlOpts, WithTablePrefix(tablePrefix))
+				}
+				if err := WithSQLStore(db, sqlOpts...)(e); err != nil {
 					return err
 				}
 			case "memory":

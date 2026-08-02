@@ -246,6 +246,27 @@ response.
       `govulncheck`, Postgres 17 integration).
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
+### SQL table prefix (P5.17, 2026-08-02)
+
+User-requested: prefix all SQL table names so multiple apps/tenants can share
+one database without collisions (mirrors the existing Redis key prefix).
+
+- [x] `sqlstore.go`: `SQLStoreOption` + `WithTablePrefix` (identifier-safe
+      validation: letters/digits/underscore, no leading digit); `NewSQLStore`
+      now accepts options (variadic — backward compatible); `buildQueries`
+      templates all 5 table names from the prefix.
+- [x] `options.go`: `WithSQLStore(db, opts...)` passes SQLStoreOptions through.
+- [x] `env.go`: `RBAC_SQL_TABLE_PREFIX` (STORE=sql only).
+- [x] `table_prefix_test.go`: isolation of two prefixes on one SQLite file,
+      prefixed-table creation, invalid prefixes rejected, env path valid +
+      invalid; core coverage stays **100.0%**.
+- [x] Postgres 17 integration: `WithTablePrefix("pg2_")` namespace on the same
+      DB (isolation + enforcement); prefixed tables cleaned up.
+- [x] README SQL store section + plan §6.7 + ADR-013.
+- [ ] Final verification sweep (build, vet, `-race` 6 modules, coverage, `go mod tidy -diff`,
+      `govulncheck`, Postgres 17 integration).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),

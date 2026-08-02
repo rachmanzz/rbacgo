@@ -19,9 +19,9 @@ func WithStore(s Store) Option {
 
 // WithSQLStore wraps an existing *sql.DB (any database/sql driver, e.g. pgx /
 // pgxpool via the pgx stdlib adapter) in a SQL store. See NewSQLStore.
-func WithSQLStore(db *sql.DB) Option {
+func WithSQLStore(db *sql.DB, opts ...SQLStoreOption) Option {
 	return func(e *Enforcer) error {
-		s, err := NewSQLStore(db)
+		s, err := NewSQLStore(db, opts...)
 		if err != nil {
 			return err
 		}

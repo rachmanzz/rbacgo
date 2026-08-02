@@ -39,6 +39,11 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 
 	cleanup := []string{
+		"DROP TABLE IF EXISTS pg2_user_roles",
+		"DROP TABLE IF EXISTS pg2_users",
+		"DROP TABLE IF EXISTS pg2_role_parents",
+		"DROP TABLE IF EXISTS pg2_role_permissions",
+		"DROP TABLE IF EXISTS pg2_roles",
 		"DROP TABLE IF EXISTS user_roles",
 		"DROP TABLE IF EXISTS users",
 		"DROP TABLE IF EXISTS role_parents",
@@ -217,5 +222,27 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 	if err := enforcer.DeleteRole(ctx, "pg-admin", "pg-manager"); err != ErrPermissionDenied {
 		t.Fatalf("DeleteRole after losing capability error = %v, want ErrPermissionDenied", err)
+	}
+
+	// Table prefix: a second store namespaced on the same database.
+	pref, err := NewSQLStore(db, WithTablePrefix("pg2_"))
+	if err != nil {
+		t.Fatalf("NewSQLStore prefixed: %v", err)
+	}
+	if err := pref.AddRole(ctx, Role{Name: "viewer", Permissions: []Permission{{Resource: "/p", Action: "GET"}}}); err != nil {
+		t.Fatalf("AddRole prefixed: %v", err)
+	}
+	if _, ok, err := store.GetRole(ctx, "viewer"); err != nil || ok {
+		t.Fatalf("unprefixed store sees prefixed role: ok=%v err=%v", ok, err)
+	}
+	if err := pref.AssignRole(ctx, "pg2-user", "viewer"); err != nil {
+		t.Fatalf("AssignRole prefixed: %v", err)
+	}
+	prefEnforcer, err := New(WithStore(pref))
+	if err != nil {
+		t.Fatalf("New prefixed: %v", err)
+	}
+	if !prefEnforcer.Enforce(ctx, "pg2-user", "/p", "GET") {
+		t.Fatal("expected allow via prefixed tables on Postgres")
 	}
 }
