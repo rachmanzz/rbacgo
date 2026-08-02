@@ -88,6 +88,12 @@ jobs:
           set -e
           for mod in . http fiber echo gin examples; do
             echo "== $mod =="
+            # govulncheck exits non-zero only for vulnerabilities that affect
+            # the build. GO-2026-5932 (golang.org/x/crypto/openpgp, transitive
+            # via Fiber v3 / Gin v1, no fix published, never called by rbacgo)
+            # is reported informationally (exit 0) and documented in README
+            # "Known residual (security)". Any new *called* vulnerability
+            # fails this job.
             (cd "$mod" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
           done
 

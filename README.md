@@ -349,6 +349,16 @@ Try `curl -H "X-User-ID: alice" localhost:8080/articles`.
    client/UI expects them, and override with `WithUnauthorizedHandler` /
    `WithDeniedHandler` per adapter.
 
+## Known residual (security)
+
+`govulncheck` is clean on all six modules except one advisory: **GO-2026-5932** on
+`golang.org/x/crypto/openpgp`. It is inherited transitively from Fiber v3 / Gin v1 and has
+**no published fix** (the advisory marks the package unsafe-by-design). It is **not called**
+by any rbacgo code path, so govulncheck reports it only informationally and still exits 0.
+CI runs govulncheck in default symbol mode (see `.github/workflows/ci.yml`); the residual
+is non-blocking there. Re-evaluate before every release — if a fix appears or the
+transitive dependency drops, remove this note.
+
 ## Roadmap & non-goals
 
 - v1: roles, hierarchy, SQL/SQLite/memory storage, LRU cache (memory + Redis),
