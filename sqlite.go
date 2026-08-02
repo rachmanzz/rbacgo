@@ -7,6 +7,8 @@ import (
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for the default embedded store
 )
 
+var sqlOpen = sql.Open
+
 // WithSQLite configures the embedded SQLite store. path may be ":memory:" for
 // an ephemeral database or a file path for persistence. For ":memory:" the
 // store is serialized onto a single connection so concurrent access shares one
@@ -23,7 +25,7 @@ func WithSQLite(path string) Option {
 }
 
 func newSQLiteStore(path string) (Store, error) {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sqlOpen("sqlite3", path)
 	if err != nil {
 		return nil, fmt.Errorf("rbacgo: open sqlite: %w", err)
 	}

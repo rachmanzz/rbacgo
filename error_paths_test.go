@@ -228,6 +228,24 @@ func TestWithSQLStoreNil(t *testing.T) {
 	}
 }
 
+func TestSQLOpenFailurePaths(t *testing.T) {
+	old := sqlOpen
+	sqlOpen = func(string, string) (*sql.DB, error) { return nil, errTest }
+	defer func() { sqlOpen = old }()
+
+	if _, err := newSQLiteStore(":memory:"); !errors.Is(err, errTest) {
+		t.Fatalf("newSQLiteStore = %v, want sql.Open error", err)
+	}
+	if _, err := New(); !errors.Is(err, errTest) {
+		t.Fatalf("New default store = %v, want sql.Open error", err)
+	}
+	t.Setenv("RBAC_STORE", "sql")
+	t.Setenv("RBAC_DATABASE_URL", "sqlite://test")
+	if _, err := New(WithConfigFromEnv()); !errors.Is(err, errTest) {
+		t.Fatalf("New(WithConfigFromEnv) = %v, want sql.Open error", err)
+	}
+}
+
 func TestNewSQLStoreClosedDB(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -236,6 +254,14 @@ func TestNewSQLStoreClosedDB(t *testing.T) {
 	db.Close()
 	if _, err := NewSQLStore(db); err == nil {
 		t.Fatal("expected migration error on closed database")
+	}
+}
+
+func TestNewSQLiteStoreMigrationFailureClosesDB(t *testing.T) {
+	// The _query_only pragma lets Open and Ping succeed while rejecting the
+	// schema migration, exercising the close-on-failure path.
+	if _, err := newSQLiteStore(":memory:?_query_only=1"); err == nil {
+		t.Fatal("expected migration error on query-only database")
 	}
 }
 
@@ -413,6 +439,16 @@ func TestConfigFromEnvSQLPostgresNoDriver(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnvSQLMigrationError(t *testing.T) {
+	// STORE=sql skips the ping done by the sqlite path, so a query-only
+	// database fails only when the schema migration runs.
+	t.Setenv("RBAC_STORE", "sql")
+	t.Setenv("RBAC_DATABASE_URL", ":memory:?_query_only=1")
+	if _, err := New(WithConfigFromEnv()); err == nil {
+		t.Fatal("expected error: schema migration failed on query-only database")
+	}
+}
+
 func TestEnvDurationInvalid(t *testing.T) {
 	t.Setenv("RBAC_TEST_BAD_DUR", "not-a-duration")
 	if got := envDuration("RBAC_TEST_BAD_DUR", time.Minute); got != time.Minute {
@@ -467,4 +503,28 @@ func TestConfigFromEnvSQLiteMemorySingleConnection(t *testing.T) {
 func TestMemoryLRURemoveNil(t *testing.T) {
 	c := NewMemoryLRU(2, time.Hour).(*memoryLRU)
 	c.removeElement(nil) // must not panic
+}
+
+func TestMemoryStoreAddRoleCycleRollback(t *testing.T) {
+	ctx := context.Background()
+	ms := NewMemoryStore().(*memoryStore)
+	// Pre-existing cycle injected directly into the graph; adding a child
+	// pointing at it must be rejected and rolled back.
+	ms.roles["a"] = Role{Name: "a", Parents: []string{"b"}}
+	ms.roles["b"] = Role{Name: "b", Parents: []string{"a"}}
+	if err := ms.AddRole(ctx, Role{Name: "c", Parents: []string{"a"}}); !errors.Is(err, ErrCycleDetected) {
+		t.Fatalf("AddRole = %v, want ErrCycleDetected", err)
+	}
+	if _, ok := ms.roles["c"]; ok {
+		t.Fatal("role c must be rolled back after cycle detection")
+	}
+}
+
+func TestDriverRegistered(t *testing.T) {
+	if !driverRegistered("sqlite3") {
+		t.Fatal("sqlite3 driver should be registered")
+	}
+	if driverRegistered("no-such-driver") {
+		t.Fatal("no-such-driver must not be registered")
+	}
 }

@@ -106,7 +106,7 @@ Reference: full hard audit performed 2026-08-02 on the released `v0.1.0-1` state
 - **Freshness:** all direct deps current (go-sqlite3 v1.14.49, go-redis v9.21.0,
   miniredis v2.38.0, pgx v5.10.0, Fiber v3.4.0, Echo v5.3.1, Gin v1.12.0).
 - **Licenses:** MIT LICENSE; no MPL-2.0; THIRD_PARTY_NOTICES covers all runtime deps.
-- **Tests:** core 94.4% (≥ 80%), adapters 100% incl. option-function tests, `-race` clean.
+- **Tests:** core 100.0% (≥ 80%), adapters 100% incl. option-function tests, `-race` clean.
 - **Benchmark:** 142.5 ns/op cache hit (claim 147 ns/op).
 - **CI:** YAML valid; `-run TestSQLStorePostgres` matches; DSN CI (:5432) vs local (:5433) wired;
   `permissions: contents: read`.
@@ -145,6 +145,7 @@ full module-graph license scan, and git hygiene. Execution tracked in `phases.md
 | R3 | third-party.md §4 recommends Dependabot/Renovate; no dependabot config present | LOW | Add `.github/dependabot.yml` (weekly; gomod for all 6 modules + github-actions) | **Done** (P5.10) |
 | R4 | Same `:memory:` pool bug reachable via `RBAC_STORE=sql` + `RBAC_DATABASE_URL=:memory:` — env.go creates the `*sql.DB` internally (sqlite3 driver) without capping the pool | HIGH | Cap `SetMaxOpenConns(1)`/`SetMaxIdleConns(1)` for sqlite3 `:memory:` DSN in env.go; regression test `TestConfigFromEnvSQLiteMemorySingleConnection` (fails pre-fix with `opened 2 connections`) | **Done** (P5.11) |
 | R5 | Error-path coverage gaps from round-2 audit (EnforceCtx 75%, collectEffective 76.5%, collectRoleNames 66.7%, checkCycles 73.1%, NewSQLStore 71.4%, sqlstore AddRole 70.4%, newSQLiteStore 72.7%, redisLRU Set 75%) | LOW (test gap) | Add `error_paths_test.go` covering store-failure propagation, injected-cycle/defensive paths, SQL error paths (closed DB + dropped tables + non-insertable view), Redis JSON/scan errors, env error paths; total coverage 84.0% → **94.4%** (collectRoleNames 100%) | **Done** (P5.12) |
+| R6 | Final 3 uncovered statements are the `sql.Open` error branch (`New` default store, `WithConfigFromEnv` STORE=sql, `newSQLiteStore`) — unreachable because the sqlite3/pgx drivers are always registered (blank import). Remaining SQL defensive branches (Scan column-count mismatch, rows iteration errors, BeginTx/query failures, in-tx errors) are also unproducible with the real sqlite3 driver | LOW (test-only) | Add unexported `var sqlOpen = sql.Open` seam at the two call sites (`sqlite.go`, `env.go`) and `TestSQLOpenFailurePaths` swapping it to force failures; add a scripted mock `database/sql` driver (`mock_driver_test.go`, zero new deps) to exercise the SQL defensive branches; core coverage 94.4% → **100.0%** | **Done** (P5.13) |
 
 ## 7. Definition of Done
 

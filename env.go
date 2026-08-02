@@ -74,7 +74,7 @@ func WithConfigFromEnv() Option {
 				} else {
 					driver = "sqlite3"
 				}
-				db, err := sql.Open(driver, url)
+				db, err := sqlOpen(driver, url)
 				if err != nil {
 					return fmt.Errorf("rbacgo: open %s: %w", driver, err)
 				}
