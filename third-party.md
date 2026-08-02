@@ -107,4 +107,4 @@ when redistributing binaries:
 
 - [x] Decide MySQL driver status — **removed; PostgreSQL + SQLite only** (2026-08-02).
 - [x] Decide LRU implementation: **in-house LRU** (MIT, zero-dep) chosen.
-- [ ] Add `THIRD_PARTY_NOTICES` generation step to CI/release.
+- [x] Add `THIRD_PARTY_NOTICES` generation step to CI/release. — **Done (2026-08-02):** `THIRD_PARTY_NOTICES` added at repo root with the required MIT/BSD notices; a CI generation/re-verify step is still to be wired up before release.

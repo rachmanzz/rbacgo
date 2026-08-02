@@ -1,0 +1,20 @@
+package rbacgo
+
+import "context"
+
+// Store abstracts persistence of roles, permissions, and user-role
+// assignments. Implementations may be in-memory, SQL-backed, or any other
+// backend that fits the interface.
+type Store interface {
+	// AddRole persists a role together with its permissions and parent links.
+	// It must reject duplicate role names and cycles in the hierarchy.
+	AddRole(ctx context.Context, role Role) error
+	// GetRole returns the role with the given name. The bool reports whether
+	// the role was found.
+	GetRole(ctx context.Context, name string) (Role, bool, error)
+	// AssignRole assigns a role to a user, creating the user if needed.
+	// It must fail if the role does not exist.
+	AssignRole(ctx context.Context, userID, roleName string) error
+	// GetRoles returns the names of all roles assigned to a user.
+	GetRoles(ctx context.Context, userID string) ([]string, error)
+}

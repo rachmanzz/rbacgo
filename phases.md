@@ -34,13 +34,12 @@
 - [x] `decision-log.md` — ADR-001..009.
 - [x] `third-party.md` — dependency inventory, licenses, update policy, in-house LRU (ADR-008).
 - [x] `phases.md` — this phase breakdown.
-- [ ] Re-verify framework versions (Fiber v3, Echo v5, Gin v1) before starting P3.
-- [ ] Confirm module path `github.com/rachmanzz/rbacgo` and repo access.
-
+- [x] Re-verify framework versions (Fiber v3, Echo v5, Gin v1) before starting P3.
+- [x] Confirm module path `github.com/rachmanzz/rbacgo` and repo access.
 ### Exit criteria
-- All docs consistent with each other.
-- Versions pinned/verified.
-- Any doc contradictions resolved before code starts.
+- [x] All docs consistent with each other.
+- [x] Versions pinned/verified.
+- [x] Any doc contradictions resolved before code starts.
 
 ---
 
@@ -49,27 +48,27 @@
 **Reference:** PRD §4, §6 (FR-1,2,3,6), §7; plan M1; gap P0 items.
 
 ### Tasks
-- Initialize root module `go.mod`.
-- Domain model: `Permission`, `Role`, `User` (PRD §4).
-- Enforcer: `Enforce(userID, resource, action) bool` (FR-3).
-- Role hierarchy resolution + **cycle detection** (FR-2, PRD §4).
-- `Store` interface (FR-6) + SQL store implementation — pluggable via user-supplied
+- [x] Initialize root module `go.mod`.
+- [x] Domain model: `Permission`, `Role`, `User` (PRD §4).
+- [x] Enforcer: `Enforce(userID, resource, action) bool` (FR-3).
+- [x] Role hierarchy resolution + **cycle detection** (FR-2, PRD §4).
+- [x] `Store` interface (FR-6) + SQL store implementation — pluggable via user-supplied
   `*sql.DB` (pgx5/pgxpool/stdlib, go-sqlite3, or any `database/sql` driver).
 - **Default store: embedded SQLite** — `rbacgo.New()` works zero-config (`:memory:`);
   file path supported for persistence.
-- Config from env (`WithConfigFromEnv`, prefix `RBAC_` default, `WithEnvPrefix` override) —
+- [x] Config from env (`WithConfigFromEnv`, prefix `RBAC_` default, `WithEnvPrefix` override) —
   store, SQLite path, cache capacity/TTL, Redis settings (FR-9, ADR-009).
-- In-memory cache; concurrency-safe engine (FR-7).
-- Table-driven tests: model, hierarchy, cycle detection, enforcement (≥ 80% core coverage).
-- Benchmarks for uncached lookup as baseline.
+- [x] In-memory cache; concurrency-safe engine (FR-7).
+- [x] Table-driven tests: model, hierarchy, cycle detection, enforcement (≥ 80% core coverage).
+- [x] Benchmarks for uncached lookup as baseline.
 
 ### Acceptance criteria
-- Enforcement returns correct decisions for direct + inherited permissions.
-- Cycles are rejected on registration.
-- `rbacgo.New()` works zero-config via embedded SQLite (`:memory:`); file-path persistence
+- [x] Enforcement returns correct decisions for direct + inherited permissions.
+- [x] Cycles are rejected on registration.
+- [x] `rbacgo.New()` works zero-config via embedded SQLite (`:memory:`); file-path persistence
   reloads state.
-- SQL store persists and reloads state.
-- All tests green; coverage ≥ 80%.
+- [x] SQL store persists and reloads state.
+- [x] All tests green; coverage ≥ 80%.
 
 ---
 
@@ -78,17 +77,17 @@
 **Reference:** PRD §6 FR-6, §7; plan M2; gap P1 items; limitation §3.
 
 ### Tasks
-- In-house LRU abstraction (capacity, TTL, eviction) — no external dep (ADR-008).
-- In-memory LRU backend.
-- Redis LRU backend.
-- Cache invalidation hooks on role/permission/assignment changes.
-- Integration tests: cache hit/miss, TTL expiry, eviction, invalidation.
-- Benchmark: cache hit decision **under 1 ms**.
+- [x] In-house LRU abstraction (capacity, TTL, eviction) — no external dep (ADR-008).
+- [x] In-memory LRU backend.
+- [x] Redis LRU backend.
+- [x] Cache invalidation hooks on role/permission/assignment changes.
+- [x] Integration tests: cache hit/miss, TTL expiry, eviction, invalidation.
+- [x] Benchmark: cache hit decision **under 1 ms**.
 
 ### Acceptance criteria
-- Both backends pass the same behavior suite.
-- Invalidation propagates correctly in-memory and via Redis.
-- Cache-hit benchmark < 1 ms.
+- [x] Both backends pass the same behavior suite.
+- [x] Invalidation propagates correctly in-memory and via Redis.
+- [x] Cache-hit benchmark < 1 ms.
 
 ---
 
@@ -104,13 +103,13 @@
 - **Fiber v3 adapter** — idiomatic middleware, 403 JSON response (FR-5).
 - **Echo v5 adapter** — idiomatic middleware, `echo.NewHTTPError` mapping (FR-5).
 - **Gin v1 adapter** — idiomatic middleware, `AbortWithStatusJSON` mapping (FR-5).
-- Each adapter as its own `go.mod` module with `replace` to local core.
-- Adapter test suites using each framework's test utilities.
+- [x] Each adapter as its own `go.mod` module with `replace` to local core.
+- [x] Adapter test suites using each framework's test utilities.
 
 ### Acceptance criteria
-- One passing test suite per adapter.
-- Consistent option API across adapters (same semantics, PRD §12).
-- 401 vs 403 behavior matches PRD §9.
+- [x] One passing test suite per adapter.
+- [x] Consistent option API across adapters (same semantics, PRD §12).
+- [x] 401 vs 403 behavior matches PRD §9.
 
 ---
 
@@ -119,14 +118,14 @@
 **Reference:** PRD §10 M4, §12; plan M4; gap P2 items.
 
 ### Tasks
-- Runnable example per adapter under `examples/`.
-- README with install snippets and quick start.
-- godoc-quality doc comments on all exported symbols.
+- [x] Runnable example per adapter under `examples/`.
+- [x] README with install snippets and quick start.
+- [x] godoc-quality doc comments on all exported symbols.
 - Multi-module release tags (`http/v1.0.0`, `fiber/v1.0.0`, ...).
 - Final version re-verification (Fiber v3, Echo v5, Gin v1).
 
 ### Acceptance criteria
-- Each adapter has a runnable example.
+- [x] Each adapter has a runnable example.
 - Installation commands from plan.md §5 work end-to-end.
 - Tags published per Go multi-module conventions.
 
