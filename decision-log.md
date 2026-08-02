@@ -331,3 +331,34 @@ key prefix; the SQL store did not.
   `Store` interface untouched.
 - Invalid prefixes fail fast at construction (or env-config time), before any
   SQL runs.
+
+## ADR-014 — policy_version in PermissionView
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** plan §6.8, phases P5.18
+
+### Context
+Frontends cache the permission payload and need cheap change detection to
+refresh menus/routes when the policy changes elsewhere (admin actions, other
+tabs). Diffing a large permission object on every render is wasteful and
+error-prone.
+
+### Decision
+- Add `policy_version` (uint64) to `PermissionView`, monotonically incremented
+  on every successful policy mutation: RegisterRole (and per-role within
+  RegisterRoles), AssignRole, UnassignRole, DeleteRole. Failed mutations never
+  bump it.
+- Held as `atomic.Uint64` in the Enforcer, so concurrent reads and mutations
+  are race-free.
+- The FE contract is one number: store it, compare it, re-render on change.
+  ETag/304 optimization is left to the app; the JSON contract stays stable.
+- The counter is in-memory: consistent for the instance serving the endpoint.
+  Multi-instance deployment can replace the source of the number later without
+  changing the payload contract.
+
+### Consequences
+- FE change detection becomes trivial and reliable; multi-tab staleness is
+  detectable without polling.
+- The payload gains one field; existing consumers must ignore unknown
+  top-level fields (JSON-compatible).

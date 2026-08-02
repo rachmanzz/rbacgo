@@ -267,6 +267,25 @@ one database without collisions (mirrors the existing Redis key prefix).
       `govulncheck`, Postgres 17 integration).
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
+### policy_version for FE cache invalidation (P5.18, 2026-08-02)
+
+User-approved: `PermissionView` carries a monotonic `policy_version` so
+frontends detect policy changes by comparing one number instead of diffing
+payloads (multi-tab / long-session refresh).
+
+- [x] `enforcer.go`: `policyVersion atomic.Uint64` (race-safe); bumped only on
+      successful mutations (RegisterRole / RegisterRoles per role / AssignRole
+      / UnassignRole / DeleteRole) via `bumpPolicyVersion`.
+- [x] `model.go`: `PermissionView.PolicyVersion` with `json:"policy_version"`.
+- [x] `permission_view_test.go`: exact JSON shape incl. version, monotonic
+      increment across the full mutation flow (failed mutations must NOT
+      bump), concurrent reader/mutator race test; core coverage stays
+      **100.0%**.
+- [x] README (payload example + FE usage pattern) + plan §6.8 + ADR-014.
+- [ ] Final verification sweep (build, vet, `-race` 6 modules, coverage, `go mod tidy -diff`,
+      `govulncheck`, Postgres 17 integration).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
 ### Acceptance criteria
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),

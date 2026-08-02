@@ -212,6 +212,20 @@ User-requested: namespace SQL tables per application/tenant sharing one DB
   the prefixed tables.
 - Execution tracked in `phases.md` P5.17; decision-log ADR-013.
 
+### 6.8 policy_version (2026-08-02, feature)
+
+User-approved: FE-friendly policy change detection for `PermissionView`:
+
+- `policy_version` field in the snapshot: monotonic counter incremented on
+  every successful policy mutation (RegisterRole, AssignRole, UnassignRole,
+  DeleteRole); failed mutations never bump it.
+- Stored as `atomic.Uint64` in the Enforcer (concurrency-safe); FE compares
+  the number across snapshots and re-renders only on change.
+- In-memory counter = consistent for the instance serving the endpoint;
+  multi-instance consistency is out of scope (contract unchanged, the source
+  of the number can be swapped later without changing the JSON).
+- Execution tracked in `phases.md` P5.18; decision-log ADR-014.
+
 ## 7. Definition of Done
 
 - Core engine test coverage ≥ 80%.

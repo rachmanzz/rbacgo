@@ -3,6 +3,7 @@ package rbacgo
 import (
 	"context"
 	"sort"
+	"sync/atomic"
 )
 
 // permissionSet maps resource -> action -> allowed. It is JSON-serializable so
@@ -20,6 +21,10 @@ type Enforcer struct {
 	// operations (DeleteRole / UnassignRole). Default: ("roles", "manage").
 	manageRes string
 	manageAct string
+	// policyVersion increments on every policy mutation (role registration,
+	// assignment, unassignment, deletion). Frontends compare it across
+	// PermissionView snapshots to detect changes without diffing payloads.
+	policyVersion atomic.Uint64
 }
 
 // Option configures an Enforcer. Options are applied in order; environment
@@ -53,6 +58,7 @@ func (e *Enforcer) RegisterRole(ctx context.Context, role Role) error {
 	if err := e.store.AddRole(ctx, role); err != nil {
 		return err
 	}
+	e.bumpPolicyVersion()
 	e.flushCache()
 	return nil
 }
@@ -73,6 +79,7 @@ func (e *Enforcer) AssignRole(ctx context.Context, userID, roleName string) erro
 	if err := e.store.AssignRole(ctx, userID, roleName); err != nil {
 		return err
 	}
+	e.bumpPolicyVersion()
 	e.dropCache(userID)
 	return nil
 }
@@ -93,6 +100,7 @@ func (e *Enforcer) DeleteRole(ctx context.Context, userID, roleName string) erro
 	if err := d.DeleteRole(ctx, roleName); err != nil {
 		return err
 	}
+	e.bumpPolicyVersion()
 	e.flushCache()
 	return nil
 }
@@ -112,6 +120,7 @@ func (e *Enforcer) UnassignRole(ctx context.Context, userID, targetUserID, roleN
 	if err := u.UnassignRole(ctx, targetUserID, roleName); err != nil {
 		return err
 	}
+	e.bumpPolicyVersion()
 	e.dropCache(targetUserID)
 	return nil
 }
@@ -126,6 +135,11 @@ func (e *Enforcer) requireManagement(ctx context.Context, userID string) error {
 		return ErrPermissionDenied
 	}
 	return nil
+}
+
+// bumpPolicyVersion advances the policy version after a successful mutation.
+func (e *Enforcer) bumpPolicyVersion() {
+	e.policyVersion.Add(1)
 }
 
 // Enforce reports whether userID may perform action on resource, considering
@@ -173,7 +187,12 @@ func (e *Enforcer) PermissionView(ctx context.Context, userID string) (Permissio
 	if roles == nil {
 		roles = []string{}
 	}
-	return PermissionView{UserID: userID, Roles: roles, Permissions: perms}, nil
+	return PermissionView{
+		UserID:        userID,
+		Roles:         roles,
+		Permissions:   perms,
+		PolicyVersion: e.policyVersion.Load(),
+	}, nil
 }
 
 // HasRole reports whether userID holds the given role (including inheritance).

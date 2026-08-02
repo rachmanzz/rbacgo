@@ -166,7 +166,20 @@ json.NewEncoder(w).Encode(view) // in real apps: never return raw errors
   "permissions": {
     "/articles": ["GET", "POST"],
     "/comments": ["GET"]
-  }
+  },
+  "policy_version": 3
+}
+```
+
+`policy_version` increments on every successful policy mutation (role
+registration, assignment, unassignment, deletion). Frontends store the version
+next to the payload and re-render only when it changes — no payload diffing
+needed, and multi-tab sessions detect stale access rights automatically:
+
+```js
+if (payload.policy_version !== lastVersion) {
+  saveVersion(payload.policy_version)
+  renderUI(payload)
 }
 ```
 

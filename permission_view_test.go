@@ -73,7 +73,7 @@ func TestPermissionViewJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	want := `{"user_id":"user-123","roles":["editor"],"permissions":{"/articles":["GET","POST"],"/comments":["GET"]}}`
+	want := `{"user_id":"user-123","roles":["editor"],"permissions":{"/articles":["GET","POST"],"/comments":["GET"]},"policy_version":3}`
 	if string(raw) != want {
 		t.Fatalf("JSON = %s, want %s", raw, want)
 	}
@@ -93,7 +93,7 @@ func TestPermissionViewEmptyUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	want := `{"user_id":"unknown","roles":[],"permissions":{}}`
+	want := `{"user_id":"unknown","roles":[],"permissions":{},"policy_version":0}`
 	if string(raw) != want {
 		t.Fatalf("JSON = %s, want %s", raw, want)
 	}
@@ -120,6 +120,97 @@ func TestPermissionViewUsesCache(t *testing.T) {
 			t.Fatalf("run %d: permissions = %v, want GET", i, view.Permissions)
 		}
 	}
+}
+
+func TestPolicyVersionIncrements(t *testing.T) {
+	ctx := context.Background()
+	e, err := New(WithMemoryStore())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	version := func() uint64 {
+		v, err := e.PermissionView(ctx, "u")
+		if err != nil {
+			t.Fatalf("PermissionView: %v", err)
+		}
+		return v.PolicyVersion
+	}
+	if got := version(); got != 0 {
+		t.Fatalf("initial version = %d, want 0", got)
+	}
+
+	// Each successful mutation bumps the version by one.
+	if err := e.RegisterRole(ctx, Role{Name: "viewer"}); err != nil {
+		t.Fatalf("RegisterRole: %v", err)
+	}
+	if err := e.RegisterRoles(ctx, Role{Name: "editor"}, Role{Name: "manager"}); err != nil {
+		t.Fatalf("RegisterRoles: %v", err)
+	}
+	if err := e.AssignRole(ctx, "u", "viewer"); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	if err := e.UnassignRole(ctx, "admin-holder", "u", "viewer"); err != ErrPermissionDenied {
+		t.Fatalf("UnassignRole = %v, want ErrPermissionDenied (no bump)", err)
+	}
+	if got := version(); got != 4 {
+		t.Fatalf("version after 4 mutations = %d, want 4", got)
+	}
+
+	// Failed mutations must not bump the version.
+	if err := e.RegisterRole(ctx, Role{Name: "viewer"}); err != ErrRoleExists {
+		t.Fatalf("duplicate RegisterRole = %v, want ErrRoleExists", err)
+	}
+	if err := e.AssignRole(ctx, "u", "missing"); err != ErrRoleNotFound {
+		t.Fatalf("AssignRole missing = %v, want ErrRoleNotFound", err)
+	}
+	if got := version(); got != 4 {
+		t.Fatalf("version after failed mutations = %d, want 4", got)
+	}
+
+	// Role management mutations bump only on success.
+	if err := e.RegisterRole(ctx, Role{Name: "admin", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}); err != nil {
+		t.Fatalf("RegisterRole admin: %v", err)
+	}
+	if err := e.AssignRole(ctx, "admin", "admin"); err != nil {
+		t.Fatalf("AssignRole admin: %v", err)
+	}
+	if err := e.UnassignRole(ctx, "admin", "u", "viewer"); err != nil {
+		t.Fatalf("UnassignRole: %v", err)
+	}
+	if err := e.DeleteRole(ctx, "admin", "viewer"); err != nil {
+		t.Fatalf("DeleteRole: %v", err)
+	}
+	if err := e.DeleteRole(ctx, "admin", "viewer"); err != ErrRoleNotFound {
+		t.Fatalf("second DeleteRole = %v, want ErrRoleNotFound", err)
+	}
+	if got := version(); got != 8 {
+		t.Fatalf("version after management flow = %d, want 8", got)
+	}
+}
+
+func TestPolicyVersionConcurrent(t *testing.T) {
+	ctx := context.Background()
+	e, err := New(WithMemoryStore())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.RegisterRole(ctx, Role{Name: "viewer"}); err != nil {
+		t.Fatalf("RegisterRole: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			if _, err := e.PermissionView(ctx, "u"); err != nil {
+				t.Errorf("PermissionView: %v", err)
+				return
+			}
+		}
+	}()
+	for i := 0; i < 100; i++ {
+		_ = e.AssignRole(ctx, "u", "viewer")
+	}
+	<-done
 }
 
 func TestPermissionViewErrors(t *testing.T) {
