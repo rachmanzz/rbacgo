@@ -81,3 +81,64 @@ func TestUnauthorized(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
+
+func TestCustomDenied(t *testing.T) {
+	e := setup(t)
+	app := echo.New()
+	app.Use(Middleware(e, WithDeniedHandler(func(c *echo.Context) error {
+		return c.String(http.StatusForbidden, "custom-denied")
+	})))
+	app.GET("/articles", func(c *echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+	rec := do(t, app, "user-2")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if rec.Body.String() != "custom-denied" {
+		t.Fatalf("body = %q, want custom-denied", rec.Body.String())
+	}
+}
+
+func TestCustomUnauthorized(t *testing.T) {
+	e := setup(t)
+	app := echo.New()
+	app.Use(Middleware(e, WithUnauthorizedHandler(func(c *echo.Context) error {
+		return c.String(http.StatusUnauthorized, "custom-unauthorized")
+	})))
+	app.GET("/articles", func(c *echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+	rec := do(t, app, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if rec.Body.String() != "custom-unauthorized" {
+		t.Fatalf("body = %q, want custom-unauthorized", rec.Body.String())
+	}
+}
+
+func TestCustomExtractors(t *testing.T) {
+	e := setup(t)
+	app := echo.New()
+	app.Use(Middleware(e,
+		WithUserID(func(c *echo.Context) (string, bool) {
+			id := c.Request().Header.Get("Authorization")
+			return id, id != ""
+		}),
+		WithResourceAction(func(c *echo.Context) (string, string) {
+			r := c.Request()
+			return r.URL.Path, "GET"
+		}),
+	))
+	app.GET("/articles", func(c *echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+	req := httptest.NewRequest(http.MethodGet, "/articles", nil)
+	req.Header.Set("Authorization", "user-1")
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}

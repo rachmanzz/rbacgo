@@ -2,6 +2,8 @@ module github.com/rachmanzz/rbacgo/examples
 
 go 1.25.7
 
+toolchain go1.25.12
+
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/gofiber/fiber/v3 v3.4.0
@@ -42,7 +44,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/redis/go-redis/v9 v9.21.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect

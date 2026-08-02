@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOPROXY: https://proxy.golang.org,direct
+
+jobs:
+  test:
+    name: test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [., http, fiber, echo, gin, examples]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: rbac
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: rbac
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rbac -d rbac"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache-dependency-path: |
+            go.sum
+            http/go.sum
+            fiber/go.sum
+            echo/go.sum
+            gin/go.sum
+            examples/go.sum
+
+      - name: gofmt
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then gofmt -l .; exit 1; fi
+
+      - name: go.mod tidy
+        working-directory: ${{ matrix.module }}
+        run: go mod tidy -diff
+
+      - name: Build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+
+      - name: Vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: Test (race)
+        working-directory: ${{ matrix.module }}
+        run: go test -race -count=1 ./...
+
+      - name: Postgres integration test (core only)
+        if: matrix.module == '.'
+        env:
+          RBAC_TEST_POSTGRES_DSN: postgres://rbac:test@localhost:5432/rbac?sslmode=disable
+        run: go test -tags integration -count=1 -run TestSQLStorePostgres ./...
+
+  security:
+    name: security (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+
+      - name: govulncheck (all modules)
+        run: |
+          set -e
+          for mod in . http fiber echo gin examples; do
+            echo "== $mod =="
+            (cd "$mod" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
+          done
+
+  compliance:
+    name: compliance (license + notices + deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: LICENSE + THIRD_PARTY_NOTICES present
+        run: |
+          test -f LICENSE || { echo "LICENSE missing"; exit 1; }
+          test -f THIRD_PARTY_NOTICES || { echo "THIRD_PARTY_NOTICES missing"; exit 1; }
+          for name in go-sqlite3 go-redis fiber echo gin; do
+            grep -qi "$name" THIRD_PARTY_NOTICES || { echo "notice missing for $name"; exit 1; }
+          done
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+
+      - name: Direct dependencies up to date (warning only)
+        run: |
+          for mod in . http fiber echo gin; do
+            echo "== $mod =="
+            (cd "$mod" && go mod edit -json | jq -r '.Require[] | select(.Indirect != true) | .Path' \
+              | grep -v '^github.com/rachmanzz/rbacgo$' | while read -r p; do
+                cur=$(go mod edit -json | jq -r --arg p "$p" '.Require[] | select(.Path == $p) | .Version')
+                up=$(go list -m -u "$p" 2>/dev/null | awk '{print $3}' | tr -d '[]')
+                if [ -n "$up" ] && [ "$up" != "" ] && [ "$up" != "$cur" ]; then
+                  echo "  $p: $cur -> $up"
+                fi
+              done)
+          done

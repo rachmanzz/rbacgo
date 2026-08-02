@@ -132,7 +132,7 @@ rbacgo/
   separate `go.mod`, enabling independent versioning and per-framework installation.
 - During local development, adapter modules use a `replace` directive pointing at the core
   module; releases are tagged with version suffixes per Go multi-module conventions
-  (e.g. `http/v1.0.0`, `fiber/v1.0.0`).
+  (e.g. `http/v0.1.0-1`, `fiber/v0.1.0-1`).
 
 ### Per-framework installation
 ```sh
@@ -208,10 +208,11 @@ go get github.com/rachmanzz/rbacgo
 ## 7. Non-Functional Requirements
 
 - **Performance:** cache hit decision under 1 ms; O(1) lookup via map + LRU on hot path.
-- **Compatibility:** works with the latest stable Go release; core engine has **zero**
-  third-party dependencies; adapters depend only on their framework + core. Adapter
-  compatibility matrix — Fiber **v3**, Echo **v5**, Gin **v1 latest**, `net/http`
-  (latest stdlib).
+- **Compatibility:** works with the latest stable Go release; the core engine logic has **zero**
+  third-party dependencies (stdlib only). The module ships optional backends — embedded SQLite
+  (`go-sqlite3`) and Redis cache (`go-redis`) — which are the module's only third-party
+  dependencies. Adapters depend only on their framework + core. Adapter compatibility matrix —
+  Fiber **v3**, Echo **v5**, Gin **v1 latest**, `net/http` (latest stdlib).
 - **Backward compatibility:** public API is additive only; no breaking changes without a
   major version bump.
 - **Security:** hierarchy resolution must not over-grant; cycles rejected; no permission
@@ -329,7 +330,8 @@ r.Use(ginadapter.Middleware(enforcer, ginadapter.WithUserID(...)))
 
 - Core engine test coverage ≥ 80%.
 - Lookup performance with cache hit under 1 ms (benchmarked).
-- Zero third-party dependencies in the core engine.
+- Zero third-party dependencies in the core engine logic (the optional SQLite and Redis
+  backends are the module's only third-party dependencies).
 - At least one runnable example per adapter merged before v1.
 - Adoptable API that is identical in spirit across all four adapters (same options,
   same semantics).

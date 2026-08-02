@@ -10,7 +10,8 @@ each one wraps the same core engine and storage.
 
 ## Features
 
-- **Framework-agnostic core** — zero third-party dependencies.
+- **Framework-agnostic core** — the engine logic is stdlib-only (zero third-party
+  dependencies); the module ships optional SQLite and Redis backends.
 - **Role hierarchy** — a role can inherit from parent roles; effective
   permissions are the union of all ancestors. Cycles are detected and rejected.
 - **Pluggable storage** — SQL store (PostgreSQL / SQLite / any `database/sql`
@@ -41,7 +42,7 @@ go get github.com/rachmanzz/rbacgo/gin     # Gin v1
 ```
 
 Each adapter is its own Go module with independent versioning
-(`http/v1.0.0`, `fiber/v1.0.0`, ...).
+(`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).
 
 ## Quick start
 
@@ -226,6 +227,15 @@ enforcer, err := rbacgo.New(
 > that memory usage does not balloon. When memory is a hard constraint, prefer
 > the Redis backend or set `RBAC_CACHE=none`.
 
+> **Redis Cluster note.** The Redis LRU cache clears entries with a `SCAN` +
+> `DEL` walk over the configured key prefix (used when a role is re-registered,
+> since the affected users cannot be enumerated cheaply). On Redis **Cluster**,
+> keys are sharded by hash slot, so a multi-key `DEL` for keys spread across
+> slots requires `CLUSTER SETSLOT` handling — the plain `DEL` call will return a
+> `CROSSSLOT` error and only single-key deletes are guaranteed. If you run a
+> Redis Cluster, prefer the standalone Redis backend for the cache, or accept
+> that invalidation may fall back to TTL expiry.
+
 ## Environment configuration
 
 All store/cache settings are configurable via `RBAC_`-prefixed environment
@@ -284,7 +294,9 @@ Try `curl -H "X-User-ID: alice" localhost:8080/articles`.
 ## Compatibility
 
 - **Go:** latest stable release.
-- **Core engine:** zero third-party dependencies.
+- **Core engine logic:** stdlib-only (zero third-party dependencies). The module's only
+  third-party deps are the optional backends: embedded SQLite (`go-sqlite3`) and Redis
+  cache (`go-redis`).
 - **Adapters:** Fiber **v3**, Echo **v5**, Gin **v1 latest**, `net/http`
   (latest stdlib). Older majors are not supported.
 

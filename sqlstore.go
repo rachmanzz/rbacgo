@@ -252,17 +252,30 @@ func (s *sqlStore) checkCycles(ctx context.Context, q querrer, roleName string) 
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		// Collect parents and close rows before recursing: issuing further
+		// queries on the same transaction while rows are still open fails on
+		// PostgreSQL ("conn busy").
+		var parents []string
 		for rows.Next() {
 			var parent string
 			if err := rows.Scan(&parent); err != nil {
+				rows.Close()
 				return err
 			}
+			parents = append(parents, parent)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+
+		for _, parent := range parents {
 			if err := visit(parent); err != nil {
 				return err
 			}
 		}
-		return rows.Err()
+		return nil
 	}
 	return visit(roleName)
 }

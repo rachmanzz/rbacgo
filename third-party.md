@@ -17,8 +17,10 @@
    compatible with MIT (MIT, BSD-2/3-Clause, ISC, Apache-2.0). Weak-copyleft licenses
    (e.g. MPL-2.0) are **not** accepted as direct dependencies without explicit approval
    (see §5).
-3. **Zero-dep core** — the core engine module must have **zero** third-party dependencies
-   (PRD §7, ADR-006). Only adapters and the storage package may pull dependencies.
+3. **Zero-dep core logic** — the core engine *logic* (enforcer, model, stores interface,
+   in-house LRU) is **stdlib-only**. The module ships optional backends — embedded SQLite
+   (`go-sqlite3`) and Redis cache (`go-redis`) — which are the module's only third-party
+   dependencies; `miniredis` is test-only (PRD §7, ADR-006). Only adapters pull further deps.
 4. Re-verify versions + licenses online before every release and update this file.
 
 ---
@@ -27,9 +29,14 @@
 
 ### Core engine module (`github.com/rachmanzz/rbacgo`)
 
-| Library | Purpose | Version | License | MIT-compatible |
-| --- | --- | --- | --- | --- |
-| *(none)* | Core engine stays dependency-free | — | — | — |
+> The engine logic is **stdlib-only** (zero third-party deps). The module's only third-party
+> dependencies are the optional backends below.
+
+| Library | Module | Purpose | Version | License | MIT-compatible |
+| --- | --- | --- | --- | --- | --- |
+| go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.49 | MIT | ✅ |
+| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.21.0 | BSD-2-Clause | ✅ |
+| miniredis | `github.com/alicebob/miniredis/v2` | In-process Redis for tests (test-only) | v2.38.0 | MIT | ✅ |
 
 ### Storage (`rbacgo/store`)
 

@@ -32,7 +32,8 @@ All P0–P4 items are complete. Remaining before v1.0 release:
 
 1. **CI** — build/test pipeline, dependency freshness + vulnerability check
    (`govulncheck`, `go list -m -u`), `THIRD_PARTY_NOTICES` generation step.
-2. **Release** — per-module version tags (`http/v1.0.0`, `fiber/v1.0.0`, ...).
+2. **Release** — per-module version tags starting at `v0.1.0-1`
+   (`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).
 3. **Re-verify** — adapter versions + licenses before tagging (Fiber v3, Echo v5,
    Gin v1).
 

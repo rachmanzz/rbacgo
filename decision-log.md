@@ -18,7 +18,7 @@ only what they need.
 ### Decision
 Use a monorepo where the repo root is the core module (`github.com/rachmanzz/rbacgo`) and
 each adapter directory (`http/`, `fiber/`, `echo/`, `gin/`) is its own Go module with a
-separate `go.mod`. Releases use per-module version tags (e.g. `http/v1.0.0`).
+separate `go.mod`. Releases use per-module version tags (e.g. `http/v0.1.0-1`).
 
 ### Alternatives considered
 - Single module with subpackages — simpler, but no independent versioning per adapter.
@@ -122,6 +122,13 @@ Permission data needs persistence and fast lookups; storage must be replaceable.
   settings) without waiting on rbacgo.
 - Cache coherence bounded by TTL; explicit invalidation hooks recommended.
 
+**Amendment (2026-08-02):** the SQL store's PostgreSQL dialect is now covered by an
+integration test (`sqlstore_postgres_test.go`, `//go:build integration`, run against a real
+PostgreSQL 17). It surfaced and fixed a real dialect bug: the recursive cycle-check issued
+queries on an open transaction while rows were still open, which PostgreSQL rejects with
+"conn busy" (SQLite tolerated it). `checkCycles` now collects parents and closes rows before
+recursing.
+
 ---
 
 ## ADR-006 — Go version target: latest stable
@@ -133,8 +140,16 @@ Permission data needs persistence and fast lookups; storage must be replaceable.
 Need a minimum/expected Go toolchain for the library.
 
 ### Decision
-Target the latest stable Go release (2026). Core engine keeps **zero** third-party
-dependencies; adapters depend only on their framework plus the core module.
+Target the latest stable Go release (2026). The core engine logic keeps **zero** third-party
+dependencies (stdlib only); the module ships optional backends — embedded SQLite (`go-sqlite3`)
+and Redis cache (`go-redis`) — which are the module's only third-party dependencies. Adapters
+depend only on their framework plus the core module.
+
+**Amendment (2026-08-02):** toolchain pinned to **`go 1.25.7` + `toolchain go1.25.12`** in all
+`go.mod` files (root, adapters, examples). `go 1.25.7` is the minimum supported version; the
+`toolchain` directive forces builds onto the CVE-patched `go1.25.12` (fixes the 2026 stdlib
+toolchain CVEs: GO-2026-5856/5037/4971/4947/4946/4870/4602/4601) via `GOTOOLCHAIN=auto`
+without raising the minimum Go requirement.
 
 ### Consequences
 - Can use modern stdlib features; no legacy compatibility burden.
@@ -188,8 +203,16 @@ compatible with rbacgo's MIT license. Two candidates were MPL-2.0 (weak copyleft
   `go get -u`, re-verify before release).
 - **LRU cache is implemented in-house** (small, fixed-capacity, TTL-aware). Reject
   `hashicorp/golang-lru` (MPL-2.0) — keeps the cache layer MIT-only and the core engine
-  dependency-free (ADR-006).
-- Core engine module stays at **zero** third-party dependencies.
+  logic dependency-free (ADR-006).
+- Core engine logic stays at **zero** third-party dependencies (stdlib only). The module's
+  only third-party dependencies are the optional backends: embedded SQLite (`go-sqlite3`)
+  and Redis cache (`go-redis`); `miniredis` is test-only.
+  **Amendment (2026-08-02):** the earlier "zero-dependency module" wording was inaccurate —
+  the core engine *logic* is dependency-free, not the module as a whole.
+  **Amendment 2 (2026-08-02):** `pgx` v5.10.0 (`github.com/jackc/pgx/v5`) added as a
+  **test-only** dependency for the PostgreSQL integration test
+  (`sqlstore_postgres_test.go`, `//go:build integration`), which was validated against a real
+  PostgreSQL 17 server. It is not imported by any runtime code.
 - `go-sql-driver/mysql` (MPL-2.0): **removed (2026-08-02).** MySQL is **not** supported;
   the SQL store targets PostgreSQL and SQLite only.
 

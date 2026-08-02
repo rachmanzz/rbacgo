@@ -68,7 +68,8 @@ rbacgo/
 ### M4 — Examples, docs & release (v1.0)
 - Runnable examples per adapter under `examples/`.
 - README, godoc, installation snippets.
-- Multi-module release tagging (`http/v1.0.0`, `fiber/v1.0.0`, ...).
+- Multi-module release tagging starting at `v0.1.0-1`
+  (`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).
 
 ## 4. Multi-module strategy
 

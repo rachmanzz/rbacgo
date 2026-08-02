@@ -121,7 +121,8 @@
 - [x] Runnable example per adapter under `examples/`.
 - [x] README with install snippets and quick start.
 - [x] godoc-quality doc comments on all exported symbols.
-- Multi-module release tags (`http/v1.0.0`, `fiber/v1.0.0`, ...).
+- Multi-module release tags starting at `v0.1.0-1`
+  (`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).
 - Final version re-verification (Fiber v3, Echo v5, Gin v1).
 
 ### Acceptance criteria

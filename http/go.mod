@@ -2,6 +2,8 @@ module github.com/rachmanzz/rbacgo/http
 
 go 1.25.7
 
+toolchain go1.25.12
+
 require github.com/rachmanzz/rbacgo v0.0.0
 
 require (

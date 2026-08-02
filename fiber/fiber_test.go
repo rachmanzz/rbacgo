@@ -2,6 +2,7 @@ package fiberadapter
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -81,5 +82,75 @@ func TestUnauthorized(t *testing.T) {
 	})
 	if resp := do(t, app, ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestCustomDenied(t *testing.T) {
+	e := setup(t)
+	app := fiber.New()
+	app.Use(Middleware(e, WithDeniedHandler(func(c fiber.Ctx) error {
+		return c.Status(fiber.StatusForbidden).SendString("custom-denied")
+	})))
+	app.Get("/articles", func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+	resp := do(t, app, "user-2")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "custom-denied" {
+		t.Fatalf("body = %q, want custom-denied", body)
+	}
+}
+
+func TestCustomUnauthorized(t *testing.T) {
+	e := setup(t)
+	app := fiber.New()
+	app.Use(Middleware(e, WithUnauthorizedHandler(func(c fiber.Ctx) error {
+		return c.Status(fiber.StatusUnauthorized).SendString("custom-unauthorized")
+	})))
+	app.Get("/articles", func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+	resp := do(t, app, "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "custom-unauthorized" {
+		t.Fatalf("body = %q, want custom-unauthorized", body)
+	}
+}
+
+func TestCustomExtractors(t *testing.T) {
+	e := setup(t)
+	app := fiber.New()
+	app.Use(Middleware(e,
+		WithUserID(func(c fiber.Ctx) (string, bool) {
+			id := c.Get("Authorization")
+			return id, id != ""
+		}),
+		WithResourceAction(func(c fiber.Ctx) (string, string) {
+			return c.Path(), "GET"
+		}),
+	))
+	app.Get("/articles", func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/articles", nil)
+	req.Header.Set("Authorization", "user-1")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 }

@@ -107,3 +107,16 @@ func TestCustomExtractors(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
+
+func TestCustomUnauthorized(t *testing.T) {
+	e := setup(t)
+	unauthorized := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Unauthorized", "yes")
+		w.WriteHeader(http.StatusUnauthorized)
+	}
+	h := New(e, WithUnauthorizedHandler(unauthorized))(okHandler())
+	rec := do(t, h, nil)
+	if rec.Code != http.StatusUnauthorized || rec.Header().Get("X-Unauthorized") != "yes" {
+		t.Fatalf("custom unauthorized handler not used: %d %q", rec.Code, rec.Header().Get("X-Unauthorized"))
+	}
+}
