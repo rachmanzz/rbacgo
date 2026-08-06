@@ -54,6 +54,11 @@ func WithConfigFromEnv() Option {
 		if e.env != nil && e.env.prefix != "" {
 			prefix = e.env.prefix
 		}
+		// Mark the env path as active: New() must not install its default
+		// cache when the environment explicitly chose RBAC_CACHE=none.
+		if e.env == nil {
+			e.env = &envConfig{prefix: prefix}
+		}
 		if e.store == nil {
 			switch envString(prefix+"STORE", "sqlite") {
 			case "sqlite":

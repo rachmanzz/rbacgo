@@ -43,10 +43,21 @@ func do(t *testing.T, h http.Handler, headers map[string]string) *httptest.Respo
 	return rec
 }
 
+// testNew builds the middleware with a test extractor that reads the
+// X-Test-User header — the real app provides its own WithUserID.
+func testNew(e *rbacgo.Enforcer, opts ...Option) func(http.Handler) http.Handler {
+	return New(e, append([]Option{
+		WithUserID(func(r *http.Request) (string, bool) {
+			id := r.Header.Get("X-Test-User")
+			return id, id != ""
+		}),
+	}, opts...)...)
+}
+
 func TestAllow(t *testing.T) {
 	e := setup(t)
-	h := New(e)(okHandler())
-	rec := do(t, h, map[string]string{"X-User-ID": "user-1"})
+	h := testNew(e)(okHandler())
+	rec := do(t, h, map[string]string{"X-Test-User": "user-1"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -54,9 +65,9 @@ func TestAllow(t *testing.T) {
 
 func TestForbidden(t *testing.T) {
 	e := setup(t)
-	h := New(e)(okHandler())
+	h := testNew(e)(okHandler())
 	// user-2 has no role.
-	rec := do(t, h, map[string]string{"X-User-ID": "user-2"})
+	rec := do(t, h, map[string]string{"X-Test-User": "user-2"})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
@@ -71,7 +82,7 @@ func TestForbidden(t *testing.T) {
 
 func TestUnauthorized(t *testing.T) {
 	e := setup(t)
-	h := New(e)(okHandler())
+	h := testNew(e)(okHandler())
 	rec := do(t, h, nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
@@ -84,8 +95,8 @@ func TestCustomHandlers(t *testing.T) {
 		w.Header().Set("X-Denied", "yes")
 		w.WriteHeader(http.StatusForbidden)
 	}
-	h := New(e, WithDeniedHandler(denied))(okHandler())
-	rec := do(t, h, map[string]string{"X-User-ID": "user-2"})
+	h := testNew(e, WithDeniedHandler(denied))(okHandler())
+	rec := do(t, h, map[string]string{"X-Test-User": "user-2"})
 	if rec.Code != http.StatusForbidden || rec.Header().Get("X-Denied") != "yes" {
 		t.Fatalf("custom denied handler not used: %d %q", rec.Code, rec.Header().Get("X-Denied"))
 	}
@@ -114,11 +125,20 @@ func TestCustomUnauthorized(t *testing.T) {
 		w.Header().Set("X-Unauthorized", "yes")
 		w.WriteHeader(http.StatusUnauthorized)
 	}
-	h := New(e, WithUnauthorizedHandler(unauthorized))(okHandler())
+	h := testNew(e, WithUnauthorizedHandler(unauthorized))(okHandler())
 	rec := do(t, h, nil)
 	if rec.Code != http.StatusUnauthorized || rec.Header().Get("X-Unauthorized") != "yes" {
 		t.Fatalf("custom unauthorized handler not used: %d %q", rec.Code, rec.Header().Get("X-Unauthorized"))
 	}
+}
+
+func TestMissingUserIDPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for missing WithUserID")
+		}
+	}()
+	New(setup(t))
 }
 
 func TestNilEnforcerPanics(t *testing.T) {

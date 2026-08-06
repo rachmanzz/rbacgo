@@ -115,6 +115,50 @@ func TestMemoryStoreDeleteRoleInUse(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreRoleIndexConsistency(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore().(*memoryStore)
+	if err := s.AddRole(ctx, Role{Name: "viewer"}); err != nil {
+		t.Fatalf("AddRole: %v", err)
+	}
+	if err := s.AssignRole(ctx, "u1", "viewer"); err != nil {
+		t.Fatalf("AssignRole u1: %v", err)
+	}
+	if err := s.AssignRole(ctx, "u1", "viewer"); err != nil {
+		t.Fatalf("AssignRole u1 (dup): %v", err)
+	}
+	if err := s.AssignRole(ctx, "u2", "viewer"); err != nil {
+		t.Fatalf("AssignRole u2: %v", err)
+	}
+	if got := len(s.roleUsers["viewer"]); got != 2 {
+		t.Fatalf("index size = %d, want 2", got)
+	}
+	if got, _ := s.GetRoles(ctx, "u1"); len(got) != 1 {
+		t.Fatalf("u1 roles = %v, want one entry (no duplicate)", got)
+	}
+	if err := s.UnassignRole(ctx, "u1", "viewer"); err != nil {
+		t.Fatalf("UnassignRole: %v", err)
+	}
+	if _, ok := s.roleUsers["viewer"]["u1"]; ok {
+		t.Fatal("index still holds u1 after unassign")
+	}
+	if err := s.UnassignRole(ctx, "u3", "viewer"); err != nil {
+		t.Fatalf("UnassignRole unassigned user: %v", err)
+	}
+	if err := s.UnassignRole(ctx, "u2", "viewer"); err != nil {
+		t.Fatalf("UnassignRole u2: %v", err)
+	}
+	if len(s.roleUsers["viewer"]) != 0 {
+		t.Fatalf("index not empty after all unassigns: %v", s.roleUsers["viewer"])
+	}
+	if err := s.DeleteRole(ctx, "viewer"); err != nil {
+		t.Fatalf("DeleteRole after full unassign: %v", err)
+	}
+	if _, ok := s.roleUsers["viewer"]; ok {
+		t.Fatal("roleUsers entry not removed with role")
+	}
+}
+
 func TestMemoryStoreDeleteRoleCascadesParents(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore().(*memoryStore)

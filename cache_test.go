@@ -131,6 +131,31 @@ func TestCachePreservesCorrectness(t *testing.T) {
 	}
 }
 
+func TestNewDefaultCache(t *testing.T) {
+	ctx := context.Background()
+	e := mustEnforcer(t)
+	if e.cache == nil {
+		t.Fatal("New() must enable the default in-memory LRU cache")
+	}
+	register(t, e, Role{Name: "r", Permissions: []Permission{{Resource: "x", Action: "read"}}})
+	if err := e.AssignRole(ctx, "u1", "r"); err != nil {
+		t.Fatal(err)
+	}
+	if !e.Enforce(ctx, "u1", "x", "read") {
+		t.Fatal("expected allow")
+	}
+	if _, ok := e.cache.Get("user:u1"); !ok {
+		t.Fatal("expected default cache to hold u1's permission set")
+	}
+	// Mutations must still invalidate the default cache.
+	if err := e.RegisterRole(ctx, Role{Name: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.cache.Get("user:u1"); ok {
+		t.Fatal("default cache should be flushed after role registration")
+	}
+}
+
 func TestEnvConfigRedisCacheConstruction(t *testing.T) {
 	t.Setenv("RBAC_STORE", "memory")
 	t.Setenv("RBAC_CACHE", "redis")

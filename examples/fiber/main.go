@@ -47,7 +47,13 @@ func main() {
 	seed(enforcer)
 
 	app := fiber.New()
-	app.Use(fiberadapter.Middleware(enforcer))
+	// In your real application the user ID comes from your auth layer
+	// (session, JWT claims, auth middleware context), never from a raw header.
+	// This example reads a demo header so you can try it with curl.
+	app.Use(fiberadapter.Middleware(enforcer, fiberadapter.WithUserID(func(c fiber.Ctx) (string, bool) {
+		id := c.Get("X-User-ID")
+		return id, id != ""
+	})))
 	app.Get("/articles", func(c fiber.Ctx) error {
 		return c.SendString("list articles")
 	})

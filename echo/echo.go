@@ -20,8 +20,10 @@ type Options struct {
 type Option func(*Options)
 
 // WithUserID sets the function that extracts an authenticated subject ID from
-// the request. Empty or missing IDs are treated as unauthenticated (401).
-// Defaults to reading the X-User-ID header.
+// the request (e.g. from your session, JWT claims, or auth middleware context).
+// Empty or missing IDs are treated as unauthenticated (401). This option is
+// REQUIRED: user identity comes from your application's auth, not from raw
+// HTTP headers, so Middleware panics if it is not set.
 func WithUserID(fn func(*echo.Context) (string, bool)) Option {
 	return func(o *Options) { o.userID = fn }
 }
@@ -44,10 +46,6 @@ func WithDeniedHandler(fn func(*echo.Context) error) Option {
 
 func defaultOptions() Options {
 	return Options{
-		userID: func(c *echo.Context) (string, bool) {
-			id := c.Request().Header.Get("X-User-ID")
-			return id, id != ""
-		},
 		resourceAction: func(c *echo.Context) (string, string) {
 			r := c.Request()
 			return r.URL.Path, r.Method
@@ -71,6 +69,9 @@ func Middleware(enforcer *rbacgo.Enforcer, opts ...Option) echo.MiddlewareFunc {
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(&o)
+	}
+	if o.userID == nil {
+		panic("rbacgo: WithUserID is required (user identity comes from your auth middleware, not HTTP headers)")
 	}
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {

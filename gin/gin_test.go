@@ -32,17 +32,28 @@ func do(t *testing.T, router *gin.Engine, userID string) *httptest.ResponseRecor
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/articles", nil)
 	if userID != "" {
-		req.Header.Set("X-User-ID", userID)
+		req.Header.Set("X-Test-User", userID)
 	}
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
 }
 
+// testMiddleware builds the RBAC middleware with a test extractor that reads
+// the X-Test-User header — the real app provides its own WithUserID.
+func testMiddleware(e *rbacgo.Enforcer, opts ...Option) gin.HandlerFunc {
+	return Middleware(e, append([]Option{
+		WithUserID(func(c *gin.Context) (string, bool) {
+			id := c.GetHeader("X-Test-User")
+			return id, id != ""
+		}),
+	}, opts...)...)
+}
+
 func TestAllow(t *testing.T) {
 	e := setup(t)
 	r := gin.New()
-	r.Use(Middleware(e))
+	r.Use(testMiddleware(e))
 	r.GET("/articles", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
@@ -54,7 +65,7 @@ func TestAllow(t *testing.T) {
 func TestForbidden(t *testing.T) {
 	e := setup(t)
 	r := gin.New()
-	r.Use(Middleware(e))
+	r.Use(testMiddleware(e))
 	r.GET("/articles", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
@@ -74,7 +85,7 @@ func TestForbidden(t *testing.T) {
 func TestUnauthorized(t *testing.T) {
 	e := setup(t)
 	r := gin.New()
-	r.Use(Middleware(e))
+	r.Use(testMiddleware(e))
 	r.GET("/articles", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
@@ -86,7 +97,7 @@ func TestUnauthorized(t *testing.T) {
 func TestCustomDenied(t *testing.T) {
 	e := setup(t)
 	r := gin.New()
-	r.Use(Middleware(e, WithDeniedHandler(func(c *gin.Context) {
+	r.Use(testMiddleware(e, WithDeniedHandler(func(c *gin.Context) {
 		c.String(http.StatusForbidden, "custom-denied")
 		c.Abort()
 	})))
@@ -105,7 +116,7 @@ func TestCustomDenied(t *testing.T) {
 func TestCustomUnauthorized(t *testing.T) {
 	e := setup(t)
 	r := gin.New()
-	r.Use(Middleware(e, WithUnauthorizedHandler(func(c *gin.Context) {
+	r.Use(testMiddleware(e, WithUnauthorizedHandler(func(c *gin.Context) {
 		c.String(http.StatusUnauthorized, "custom-unauthorized")
 		c.Abort()
 	})))
@@ -143,6 +154,15 @@ func TestCustomExtractors(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
+}
+
+func TestMissingUserIDPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for missing WithUserID")
+		}
+	}()
+	Middleware(setup(t))
 }
 
 func TestNilEnforcerPanics(t *testing.T) {

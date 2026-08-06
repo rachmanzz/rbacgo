@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -208,6 +211,89 @@ func TestRedisPolicyVersionErrors(t *testing.T) {
 	}
 	if _, err := vs.NextPolicyVersion(ctx); err == nil {
 		t.Fatal("NextPolicyVersion with failing redis must error")
+	}
+}
+
+// TestSharedPolicyVersionConcurrent hammers the shared Redis version source
+// from two enforcers at once: every successful mutation must bump the shared
+// counter by exactly one, and both instances must agree with the source.
+func TestSharedPolicyVersionConcurrent(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer client.Close()
+
+	mk := func() (*Enforcer, error) {
+		return New(
+			WithMemoryStore(),
+			WithPolicyVersionStore(NewRedisPolicyVersion(client, "rbac:policy_version")),
+		)
+	}
+	e1, err := mk()
+	if err != nil {
+		t.Fatalf("e1: %v", err)
+	}
+	e2, err := mk()
+	if err != nil {
+		t.Fatalf("e2: %v", err)
+	}
+
+	// Each enforcer owns a separate memory store, so both need the roles.
+	for i := 0; i < 5; i++ {
+		role := Role{Name: fmt.Sprintf("r%d", i)}
+		if err := e1.RegisterRole(ctx, role); err != nil {
+			t.Fatalf("e1 register %s: %v", role.Name, err)
+		}
+		if err := e2.RegisterRole(ctx, role); err != nil {
+			t.Fatalf("e2 register %s: %v", role.Name, err)
+		}
+	}
+	const pre = 10 // 5 registrations x 2 enforcers
+
+	const goroutines, perG = 8, 20
+	total := pre + goroutines*perG
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+	for g := range goroutines {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			e := e1
+			if g%2 == 1 {
+				e = e2
+			}
+			for i := range perG {
+				user := fmt.Sprintf("g%d-%d", g, i)
+				role := fmt.Sprintf("r%d", g%5)
+				if err := e.AssignRole(ctx, user, role); err != nil {
+					errs <- fmt.Errorf("g%d assign: %w", g, err)
+					return
+				}
+				if !e.Enforce(ctx, user, "/a", "read") {
+					// r* has no permissions; Enforce=false is expected and
+					// exercises the read path concurrently with bumps.
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	for i, e := range []*Enforcer{e1, e2} {
+		view, err := e.PermissionView(ctx, "g0-0")
+		if err != nil {
+			t.Fatalf("e%d PermissionView: %v", i+1, err)
+		}
+		if view.PolicyVersion != uint64(total) {
+			t.Fatalf("e%d sees policy_version = %d, want %d", i+1, view.PolicyVersion, total)
+		}
+	}
+	vs := NewRedisPolicyVersion(client, "rbac:policy_version")
+	if v, err := vs.PolicyVersion(ctx); err != nil || v != uint64(total) {
+		t.Fatalf("shared source = %d, %v; want %d", v, err, total)
 	}
 }
 

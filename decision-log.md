@@ -462,3 +462,98 @@ the existing `roles`/`role_permissions`/`role_parents` naming pattern.
 - Breaking for any database that had assignments in `user_roles`/`rbac_roles`;
   documented migration note in phases.md P5.22.
 
+## ADR-018 — adapters never read user identity from HTTP headers
+
+- **Date:** 2026-08-02
+- **Status:** Accepted
+- **Reference:** plan.md §6, phases P5.23
+
+### Context
+
+Adapters defaulted to reading the `X-User-ID` request header. User feedback:
+the library must not concern itself with HTTP headers at all ("kita ngak usah
+ngurusin header apa yang dikirim") — real applications already resolve the
+authenticated user in their own auth middleware (session, JWT claims, proxy
+header), and each app does it differently. A client-set header default is also
+an authorization risk when forgotten.
+
+### Decision
+- Remove the `X-User-ID` default from all four adapters; the `userID`
+  extractor starts unset.
+- `New`/`Middleware` panic fail-fast when `WithUserID` is missing, with a
+  message explaining that identity comes from the app's auth layer — the same
+  fail-fast pattern as the existing nil-enforcer panic.
+- Examples keep a demo header but wire it explicitly through `WithUserID`,
+  with a comment that a real app reads the ID from its own auth layer.
+- Breaking change for code that relied on the default header; the fix is
+  adding `WithUserID`, which every production integration should already have
+  been passing.
+
+### Consequences
+- No library-imposed identity transport; adapters follow the target app's
+  structure. Missing configuration is caught at construction time, not as a
+  500/403 in production.
+
+## ADR-019 — default in-memory LRU cache in New()
+
+- **Date:** 2026-08-06
+- **Status:** Accepted
+- **Reference:** plan.md §6 (big-O), phases P5.25
+
+### Context
+
+Every `Enforce`/`PermissionView` uncached rebuilds the user's effective
+permission set (O(R+M+P) per call with map/alloc work per call), so the big-O
+of a hot path was dominated by graph traversal. Caching was opt-in
+(`WithLRU`/`WithConfigFromEnv`). The user chose the "default LRU cache" option
+over a memory-store index.
+
+### Decision
+
+- `New()` installs `NewMemoryLRU(1024, 5m)` when no cache was configured and
+  the env-config path is inactive; decisions become O(1) hits on average with
+  bounded memory (1024 snapshots max, TTL 5m).
+- `WithConfigFromEnv` marks the env path active and remains the way to opt out
+  (`RBAC_CACHE=none`) or switch backends (`redis`); explicit `WithLRU` still
+  overrides.
+- `WithEnvPrefix`/`WithConfigFromEnv` set `e.env`, making "env took charge of
+  the cache" detectable; `WithEnvPrefix` alone (no config call) does not block
+  the default.
+
+### Consequences
+
+- Cache is flushed on every mutation (role registration, assignment,
+  unassignment), so decisions are never stale from in-process changes.
+- TTL still bounds visibility of external storage changes (see limitation.md).
+- Memory use grows by up to 1024 permission-set snapshots per enforcer; the
+  default is bounded and documented. No public API change; default-only.
+
+
+## ADR-020 — memoryStore role index
+
+- **Date:** 2026-08-06
+- **Status:** Accepted
+- **Reference:** plan.md §6 (big-O), phases P5.26
+
+### Context
+
+The big-O analysis offered two improvements: (a) default LRU cache — done in
+ADR-019 — and (b) removing O(N) scans from the in-memory store. The user chose
+to take (b) as well.
+
+### Decision
+
+- `memoryStore` keeps a `roleUsers` index (role name -> set of user IDs),
+  maintained under the existing lock:
+  - `AssignRole` duplicate check: O(len(user roles)) -> O(1);
+  - `DeleteRole` in-use check: O(U·R) scan over all assignments -> O(1);
+  - `UnassignRole` removes the index entry in sync with the slice filter.
+- `GetRole` was already O(1); the users slice keeps insertion order so
+  `GetRoles` output is unchanged.
+
+### Consequences
+
+- Mutations on the memory store are constant-time for lookup/dup/in-use paths;
+  the slice filter in `UnassignRole` is still O(roles-per-user).
+- Extra memory: one set entry per (role, user) assignment, plus one map per
+  role in use. No API or behavior change; error semantics identical.

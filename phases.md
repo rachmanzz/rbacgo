@@ -381,7 +381,62 @@ name; `rbac_roles` was rejected as redundant since "RBAC" already means
   must be copied into `role_assignments` (or re-created) before upgrading.
 - [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 
-### Acceptance criteria
+### adapters: no default user identity (P5.23, 2026-08-02)
+
+User decision: the middleware must not read the user ID from an HTTP header at
+all ("ngak usah ngurusin header apa yang dikirim"). Identity comes from the
+application's auth layer, and every app resolves it differently, so `WithUserID`
+must be provided explicitly.
+
+- [x] `http/http.go`, `gin/gin.go`, `fiber/fiber.go`, `echo/echo.go`:
+      removed the `X-User-ID` header default; `userID` starts nil and
+      `New`/`Middleware` panic fail-fast when `WithUserID` is missing (same
+      pattern as the nil-enforcer panic).
+- [x] Adapter tests: a `testNew`/`testMiddleware` helper wires
+      `WithUserID` to a `X-Test-User` header (demonstrating the app-owned
+      extractor pattern); added `TestMissingUserIDPanics` per module.
+- [x] Examples: each adapter now shows `WithUserID` reading the demo header
+      only for curl-runnability, with a comment that a real app reads the ID
+      from its own auth layer.
+- [x] Docs: README middleware section + validation checklist (no default,
+      required option).
+- [x] Verified: all 4 adapter suites + examples build clean.
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
+### default LRU cache in New() (P5.25, 2026-08-06)
+
+User decision ("Default LRU cache" over the memoryStore-index option): make the
+lookup cache on out of the box so every `Enforce`/`PermissionView` is an O(1)
+hit on average instead of rebuilding the effective permission set per call.
+
+- [x] `New()` installs `NewMemoryLRU(1024, 5m)` when no cache was configured and
+      the env path is inactive; `WithConfigFromEnv` is now marked active so
+      `RBAC_CACHE=none` still disables it (a real disable switch).
+- [x] `WithConfigFromEnv` sets `e.env` so `New()` can detect the env path;
+      `TestEnvCacheNone` guards the disable case; `TestNewDefaultCache` guards
+      the new default + flush-on-mutation.
+- [x] Docs: README "get started" paragraph, limitation.md (cache-on-by-default),
+      new ADR-019.
+- [x] Verified: `go test -race`, `go vet`, coverage stays 100.0%; no behavior
+      change to any existing decision (cache is flushed on every mutation).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+
+### memoryStore role index (P5.26, 2026-08-06)
+
+User decision: also take option (B) from the big-O analysis — index the
+memory store so mutations no longer scan.
+
+- [x] `memoryStore` gains a `roleUsers` index (role -> set of user IDs):
+      `AssignRole` duplicate check is O(1), `DeleteRole` in-use check drops
+      from O(U·R) to O(1), `UnassignRole` keeps the index in sync. `GetRole`
+      was already O(1); `GetRoles` unchanged.
+- [x] `TestMemoryStoreRoleIndexConsistency`: duplicate assign, index
+      membership after unassign, delete-after-full-unassign.
+- [x] Benchmarks published in README "Performance": default-cache hit 140 ns/op
+      vs uncached miss 549 ns/op (~3.9x), 8 B vs 560 B per decision.
+- [x] Verified: `go test -race`, `go vet`, coverage 100.0%; no API or behavior
+      change (order preserved, error semantics identical).
+- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),
       R2 (README cache claim), R3 (dependabot.yml), R4 (env-path `:memory:` concurrency fix),

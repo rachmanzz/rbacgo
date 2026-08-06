@@ -32,7 +32,7 @@ func do(t *testing.T, app *fiber.App, userID string) *http.Response {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/articles", nil)
 	if userID != "" {
-		req.Header.Set("X-User-ID", userID)
+		req.Header.Set("X-Test-User", userID)
 	}
 	resp, err := app.Test(req)
 	if err != nil {
@@ -41,10 +41,21 @@ func do(t *testing.T, app *fiber.App, userID string) *http.Response {
 	return resp
 }
 
+// testMiddleware builds the RBAC middleware with a test extractor that reads
+// the X-Test-User header — the real app provides its own WithUserID.
+func testMiddleware(e *rbacgo.Enforcer, opts ...Option) fiber.Handler {
+	return Middleware(e, append([]Option{
+		WithUserID(func(c fiber.Ctx) (string, bool) {
+			id := c.Get("X-Test-User")
+			return id, id != ""
+		}),
+	}, opts...)...)
+}
+
 func TestAllow(t *testing.T) {
 	e := setup(t)
 	app := fiber.New()
-	app.Use(Middleware(e))
+	app.Use(testMiddleware(e))
 	app.Get("/articles", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
@@ -56,7 +67,7 @@ func TestAllow(t *testing.T) {
 func TestForbidden(t *testing.T) {
 	e := setup(t)
 	app := fiber.New()
-	app.Use(Middleware(e))
+	app.Use(testMiddleware(e))
 	app.Get("/articles", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
@@ -76,7 +87,7 @@ func TestForbidden(t *testing.T) {
 func TestUnauthorized(t *testing.T) {
 	e := setup(t)
 	app := fiber.New()
-	app.Use(Middleware(e))
+	app.Use(testMiddleware(e))
 	app.Get("/articles", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
@@ -88,7 +99,7 @@ func TestUnauthorized(t *testing.T) {
 func TestCustomDenied(t *testing.T) {
 	e := setup(t)
 	app := fiber.New()
-	app.Use(Middleware(e, WithDeniedHandler(func(c fiber.Ctx) error {
+	app.Use(testMiddleware(e, WithDeniedHandler(func(c fiber.Ctx) error {
 		return c.Status(fiber.StatusForbidden).SendString("custom-denied")
 	})))
 	app.Get("/articles", func(c fiber.Ctx) error {
@@ -110,7 +121,7 @@ func TestCustomDenied(t *testing.T) {
 func TestCustomUnauthorized(t *testing.T) {
 	e := setup(t)
 	app := fiber.New()
-	app.Use(Middleware(e, WithUnauthorizedHandler(func(c fiber.Ctx) error {
+	app.Use(testMiddleware(e, WithUnauthorizedHandler(func(c fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).SendString("custom-unauthorized")
 	})))
 	app.Get("/articles", func(c fiber.Ctx) error {
@@ -153,6 +164,15 @@ func TestCustomExtractors(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+}
+
+func TestMissingUserIDPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for missing WithUserID")
+		}
+	}()
+	Middleware(setup(t))
 }
 
 func TestNilEnforcerPanics(t *testing.T) {

@@ -211,9 +211,11 @@ authenticated session, never from the request body.
 
 ## Middleware adapters
 
-All adapters share the same defaults and options: user-ID extraction (default:
-`X-User-ID` header), resource/action derivation (default: URL path + HTTP
-method), and customizable 401/403 responses.
+All adapters share the same options: user-ID extraction (`WithUserID` —
+**required**: the middleware does not read HTTP headers; the ID must come from
+your auth layer, e.g. session, JWT claims, or auth middleware context),
+resource/action derivation (default: URL path + HTTP method), and customizable
+401/403 responses.
 
 ### net/http (also Chi)
 
@@ -375,6 +377,32 @@ enforcer, err := rbacgo.New(
 > Redis Cluster, prefer the standalone Redis backend for the cache, or accept
 > that invalidation may fall back to TTL expiry.
 
+> **Redis Cluster note.** The Redis LRU cache clears entries with a `SCAN` +
+> `DEL` walk over the configured key prefix (used when a role is re-registered,
+> since the affected users cannot be enumerated cheaply). On Redis **Cluster**,
+> keys are sharded by hash slot, so a multi-key `DEL` for keys spread across
+> slots requires `CLUSTER SETSLOT` handling — the plain `DEL` call will return a
+> `CROSSSLOT` error and only single-key deletes are guaranteed. If you run a
+> Redis Cluster, prefer the standalone Redis backend for the cache, or accept
+> that invalidation may fall back to TTL expiry.
+
+## Performance
+
+Decisions hit the lookup cache by default, so the hot path is a single map
+read. Benchmarks (`go test -bench . -benchmem`) on Intel i7-8650U @ 1.90GHz,
+Go 1.25.12, 2026-08-06 — memory store, one role/user, same decision repeated:
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `BenchmarkDefaultCacheHit` (plain `New()`) | 140 | 8 | 1 |
+| `BenchmarkCacheHit` (explicit `WithLRU`) | 145 | 8 | 1 |
+| `BenchmarkNoCacheMiss` (`RBAC_CACHE=none`) | 549 | 560 | 6 |
+
+The default cache is ~3.9x faster than the uncached rebuild path per decision.
+Cache misses fall back to building the effective permission set (O(R+M+P) over
+the role graph); enable the cache or size `RBAC_CACHE_CAPACITY` to your active
+user count to keep misses rare.
+
 ## Environment configuration
 
 All store/cache settings are configurable via `RBAC_`-prefixed environment
@@ -411,9 +439,11 @@ export RBAC_REDIS_ADDR=localhost:6379
 | `RBAC_REDIS_DB` | `0` | Redis DB index |
 
 You do not need to set any of these to get started — `rbacgo.New()` works out of
-the box with an embedded `:memory:` SQLite store. The in-memory LRU cache is
-opt-in: add `WithLRU(...)`, or call `WithConfigFromEnv()` (which defaults
-`RBAC_CACHE=memory`). Set the env vars above only for what you change; the
+the box with an embedded `:memory:` SQLite store and an in-memory LRU lookup
+cache (1024 entries, 5m TTL), so every decision is an O(1) cache hit on
+average. Replace the backend with `WithLRU(...)` (e.g. a Redis LRU), or call
+`WithConfigFromEnv()` to control it via env vars (`RBAC_CACHE=none` disables
+the cache entirely). Set the env vars above only for what you change; the
 [Validation checklist](#validation-checklist) points to the env vars relevant to
 each behavior you may need to adjust.
 
@@ -430,7 +460,9 @@ go run ./gin     # Gin v1
 ```
 
 Each seeds a `viewer` / `editor` hierarchy and answers requests on `:8080`.
-Try `curl -H "X-User-ID: alice" localhost:8080/articles`.
+Try `curl -H "X-User-ID: alice" localhost:8080/articles` (the examples wire
+`WithUserID` to that demo header only to be runnable; a real app reads the ID
+from its own auth layer).
 
 ## Compatibility
 
@@ -447,10 +479,9 @@ Try `curl -H "X-User-ID: alice" localhost:8080/articles`.
 > deployment before going to production. Each item links to the relevant code
 > and the environment variables you may need.
 
-1. **User-ID extraction** — defaults to reading the `X-User-ID` request header
-   (see `WithUserID` in `http/http.go`, `fiber/fiber.go`, `echo/echo.go`,
-   `gin/gin.go`). **Do not trust a client-set header in production**: any caller
-   could set it and impersonate any user. Override `WithUserID` with your own
+1. **User-ID extraction** — `WithUserID` is **required** and has no default
+   (see `http/http.go`, `fiber/fiber.go`, `echo/echo.go`, `gin/gin.go`): the
+   middleware never reads identity from HTTP headers. Wire it to your own
    authentication (JWT claims, session cookie, upstream proxy, ...).
 
 2. **Resource/action mapping** — defaults to `(URL path, HTTP method)` (see

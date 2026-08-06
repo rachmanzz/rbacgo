@@ -48,7 +48,13 @@ func main() {
 	seed(enforcer)
 
 	e := echo.New()
-	e.Use(echoadapter.Middleware(enforcer))
+	// In your real application the user ID comes from your auth layer
+	// (session, JWT claims, auth middleware context), never from a raw header.
+	// This example reads a demo header so you can try it with curl.
+	e.Use(echoadapter.Middleware(enforcer, echoadapter.WithUserID(func(c *echo.Context) (string, bool) {
+		id := c.Request().Header.Get("X-User-ID")
+		return id, id != ""
+	})))
 	e.GET("/articles", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "list articles")
 	})

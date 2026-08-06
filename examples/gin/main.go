@@ -48,7 +48,13 @@ func main() {
 	seed(enforcer)
 
 	r := gin.Default()
-	r.Use(ginadapter.Middleware(enforcer))
+	// In your real application the user ID comes from your auth layer
+	// (session, JWT claims, auth middleware context), never from a raw header.
+	// This example reads a demo header so you can try it with curl.
+	r.Use(ginadapter.Middleware(enforcer, ginadapter.WithUserID(func(c *gin.Context) (string, bool) {
+		id := c.GetHeader("X-User-ID")
+		return id, id != ""
+	})))
 	r.GET("/articles", func(c *gin.Context) {
 		c.String(http.StatusOK, "list articles")
 	})

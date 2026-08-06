@@ -47,7 +47,13 @@ func main() {
 	}
 	seed(enforcer)
 
-	guard := httpadapter.New(enforcer)
+	// In your real application the user ID comes from your auth layer
+	// (session, JWT claims, auth middleware context), never from a raw header.
+	// This example reads a demo header so you can try it with curl.
+	guard := httpadapter.New(enforcer, httpadapter.WithUserID(func(r *http.Request) (string, bool) {
+		id := r.Header.Get("X-User-ID")
+		return id, id != ""
+	}))
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /articles", guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

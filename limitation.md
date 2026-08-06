@@ -35,6 +35,9 @@
   env vars override defaults.
 - **LRU cache trade-offs.** Cache coherence is bounded by TTL; external changes to storage
   are not visible until TTL expiry unless explicit invalidation is called.
+- **Cache is on by default.** `New()` installs an in-memory LRU (1024 entries, 5m TTL), so
+  each enforcer holds up to that many effective-permission snapshots in memory. Use
+  `WithConfigFromEnv` + `RBAC_CACHE=none` to disable, or `WithLRU` to swap the backend.
 - **Redis backend** adds a network round-trip on cache misses; cold starts are slower than
   in-memory.
 - **`policy_version` default is in-memory.** Without a shared source (SQL `meta` table via

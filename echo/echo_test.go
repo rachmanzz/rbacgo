@@ -31,17 +31,28 @@ func do(t *testing.T, app *echo.Echo, userID string) *httptest.ResponseRecorder 
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/articles", nil)
 	if userID != "" {
-		req.Header.Set("X-User-ID", userID)
+		req.Header.Set("X-Test-User", userID)
 	}
 	rec := httptest.NewRecorder()
 	app.ServeHTTP(rec, req)
 	return rec
 }
 
+// testMiddleware builds the RBAC middleware with a test extractor that reads
+// the X-Test-User header — the real app provides its own WithUserID.
+func testMiddleware(e *rbacgo.Enforcer, opts ...Option) echo.MiddlewareFunc {
+	return Middleware(e, append([]Option{
+		WithUserID(func(c *echo.Context) (string, bool) {
+			id := c.Request().Header.Get("X-Test-User")
+			return id, id != ""
+		}),
+	}, opts...)...)
+}
+
 func TestAllow(t *testing.T) {
 	e := setup(t)
 	app := echo.New()
-	app.Use(Middleware(e))
+	app.Use(testMiddleware(e))
 	app.GET("/articles", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -53,7 +64,7 @@ func TestAllow(t *testing.T) {
 func TestForbidden(t *testing.T) {
 	e := setup(t)
 	app := echo.New()
-	app.Use(Middleware(e))
+	app.Use(testMiddleware(e))
 	app.GET("/articles", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -73,7 +84,7 @@ func TestForbidden(t *testing.T) {
 func TestUnauthorized(t *testing.T) {
 	e := setup(t)
 	app := echo.New()
-	app.Use(Middleware(e))
+	app.Use(testMiddleware(e))
 	app.GET("/articles", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -85,7 +96,7 @@ func TestUnauthorized(t *testing.T) {
 func TestCustomDenied(t *testing.T) {
 	e := setup(t)
 	app := echo.New()
-	app.Use(Middleware(e, WithDeniedHandler(func(c *echo.Context) error {
+	app.Use(testMiddleware(e, WithDeniedHandler(func(c *echo.Context) error {
 		return c.String(http.StatusForbidden, "custom-denied")
 	})))
 	app.GET("/articles", func(c *echo.Context) error {
@@ -103,7 +114,7 @@ func TestCustomDenied(t *testing.T) {
 func TestCustomUnauthorized(t *testing.T) {
 	e := setup(t)
 	app := echo.New()
-	app.Use(Middleware(e, WithUnauthorizedHandler(func(c *echo.Context) error {
+	app.Use(testMiddleware(e, WithUnauthorizedHandler(func(c *echo.Context) error {
 		return c.String(http.StatusUnauthorized, "custom-unauthorized")
 	})))
 	app.GET("/articles", func(c *echo.Context) error {
@@ -141,6 +152,15 @@ func TestCustomExtractors(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
+}
+
+func TestMissingUserIDPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for missing WithUserID")
+		}
+	}()
+	Middleware(setup(t))
 }
 
 func TestNilEnforcerPanics(t *testing.T) {

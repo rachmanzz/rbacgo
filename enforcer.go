@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync/atomic"
+	"time"
 )
 
 // permissionSet maps resource -> action -> allowed. It is JSON-serializable so
@@ -35,8 +36,11 @@ type Enforcer struct {
 type Option func(*Enforcer) error
 
 // New creates an Enforcer. With no options it uses an embedded SQLite store
-// in memory (":memory:"). Supply WithSQLStore / WithSQLite / WithStore /
-// WithConfigFromEnv to customise persistence and WithLRU to enable caching.
+// in memory (":memory:") and a default in-memory LRU lookup cache (1024
+// entries, 5m TTL) so every decision is an O(1) cache hit on average. Supply
+// WithSQLStore / WithSQLite / WithStore / WithConfigFromEnv to customise
+// persistence and WithLRU to replace the cache backend; WithConfigFromEnv
+// with RBAC_CACHE=none disables the cache entirely.
 func New(opts ...Option) (*Enforcer, error) {
 	e := &Enforcer{manageRes: "roles", manageAct: "manage"}
 	for _, opt := range opts {
@@ -48,6 +52,13 @@ func New(opts ...Option) (*Enforcer, error) {
 		if err := WithSQLite(":memory:")(e); err != nil {
 			return nil, err
 		}
+	}
+	// Default lookup cache: turns each Enforce/PermissionView into a bounded,
+	// O(1) map read instead of rebuilding the effective permission set on
+	// every call. Skipped when env config (WithConfigFromEnv) took charge of
+	// the cache — it may legitimately choose "none" or a Redis backend.
+	if e.cache == nil && e.env == nil {
+		e.cache = NewMemoryLRU(1024, 5*time.Minute)
 	}
 	return e, nil
 }
