@@ -91,6 +91,40 @@ func main() {
 }
 ```
 
+## Owned permissions: `self`, `grp`, `any`
+
+Create/update/delete checks often depend on **who owns the resource** and
+**which group it belongs to**. Beyond exact `resource` + `action` matching,
+an action may carry a scope:
+
+| Permission                    | Meaning                                                              |
+|-------------------------------|----------------------------------------------------------------------|
+| `"article:delete"`            | **any** — delete any article, whoever owns it, any group             |
+| `"article:delete:any"`        | same as the plain permission (explicit alias)                        |
+| `"article:delete:self"`       | **self** — delete articles owned by the caller                       |
+| `"article:delete:grp:hr"`     | **group** — delete articles of the `hr` group (department, team, ...)|
+| `"article:create:self"`       | behaves like plain `create` (creation has no owner)                  |
+| `"article:create:grp:hr"`     | create articles into the `hr` group only                             |
+
+`EnforceOwned` decides with the resource's context passed per call — the
+owner and the group:
+
+```go
+ok, err := enforcer.EnforceOwnedCtx(ctx, "user-123", article.Owner, article.Group, "article", "delete")
+// ok == true when user-123 holds "article:delete" (any),
+//        or owns the article AND holds "article:delete:self",
+//        or the article's group is "hr" AND user-123 holds "article:delete:grp:hr".
+```
+
+Rules: a plain (or `:any`) permission wins over scoped ones — holding it
+grants the operation everywhere. Any matching scope grants (`:self` and
+`:grp:` compose: own resources anywhere, or group resources from anyone).
+An empty owner never satisfies `:self`, and an empty group never satisfies
+`:grp:` (both compared exactly). Querying a literal `"update:self"` through
+`Enforce` is exact matching and ignores owner/group. `EnforceOwned` and
+`EnforceOwnedCtx` exist like `Enforce`/`EnforceCtx` (the former treats store
+errors as deny).
+
 ## Tenants
 
 An Enforcer is scoped to exactly one tenant, and `WithTenant` is **required**
@@ -124,8 +158,9 @@ checking permissions. Two rules keep the hierarchy acyclic:
 
 1. **Parents must already exist** — a role referencing a missing parent is rejected
    with `ErrParentNotFound`.
-2. **Roles are immutable** — there is no role-update API, so a registered role's
-   parents can never be rewired.
+2. **Updates are in-place** — `UpdateRole` replaces permissions and parent
+   links but never renames; the role name is the identity, so parents always
+   reference stable names.
 
 Together these make cycles *structurally impossible* through the public API. The
 engine still ships a defensive cycle check (`detectCycle` in `memory_store.go` /

@@ -543,6 +543,13 @@ chose "both". Implemented.
 - [x] Verified: `go test -race`, `go vet`, gofmt, coverage 100.0%; PG17.9 live
       integration green; live Redis 7 sanity (cache flush + list on shared
       store) green; adapters + examples build and test green.
+- [x] Fuzz regression fix (2026-08-08): fuzzing exposed that `scopeRole`
+      (P5.27, required tenant scoping) scoped `Role.Parents` **in place**,
+      mutating the caller's slice — `RegisterRole`/`UpdateRole` no longer
+      mutate their input (copy-on-write in `scopeRole`). Failing inputs kept
+      in `testdata/fuzz/`; `TestRegisterRoleDoesNotMutateInput` added; all
+      three fuzz targets clean at 60s/30s/30s (~1.6M execs), race/vet/gofmt/
+      PG/adapters green, coverage stays 100.0%.
 - [x] Commit + push — **only on explicit user request** (AGENTS.md); pending
       user command.
 
@@ -588,3 +595,34 @@ backlog:
 - [x] Docs updated: limitation.md §1 (design noted next to each limitation),
       phases P6 task list, PRD §10/11, plan.md v2 line, gap.md, ADR-024.
 - [x] No code changes; root module + adapters untouched.
+
+### owned permissions: self, grp, any (P5.30, 2026-08-09)
+
+User request: "create, update, delete ada 2 jenis: self, any", lalu
+"kalau hanya boleh mengubah di group tertentu, contoh department". Design
+confirmed with the user: action suffix `:self`/`:grp:<id>`, owner and group
+as call arguments (group scopes the RESOURCE), plain (or `:any`) wins,
+`create:self` = `create`, generic `:grp:<id>`.
+
+- [x] `Enforcer.EnforceOwned(ctx, user, owner, group, resource, action)` +
+      `EnforceOwnedCtx` — matching order: plain action → `:any` alias →
+      `:self` (when `owner == userID`, or action is `create`) → `:grp:<id>`
+      (when `group == <id>`; empty group never satisfies). Any matching
+      scope grants; `:self` + `:grp:` compose (own resources anywhere, or
+      group resources from anyone). `create:grp:X` is scoped, unlike
+      `create:self`.
+- [x] No storage/schema/cache change: scoped actions are ordinary action
+      strings (already pass `validRole`); cache stays keyed per user and
+      owner/group comparison happens per call.
+- [x] Tests (owned_test.go): self own-only, any on others' resources, any
+      wins when both held, `:any` alias (incl. literal query), `create:self`
+      ≡ `create` (and grants nothing else), `:grp:<id>` group-only grants,
+      `:grp:` + `:self` composition, `create:grp:X` scoped to target group,
+      cached flips across contexts, error propagation + bool-variant deny.
+- [x] Docs: README "Owned permissions" section (+ fixed stale "roles are
+      immutable" text from before P5.28), ADR-025.
+- [x] Verified: `go test -race`, `go vet`, gofmt, coverage 100.0%; fuzz
+      HierarchyResolution 20s green; PG17.9 live integration green; 4
+      adapters green (root-only change).
+- [x] Commit + push — **only on explicit user request** (AGENTS.md); pending
+      user command.

@@ -129,6 +129,39 @@ func TestRegisterRolesStopsOnError(t *testing.T) {
 	}
 }
 
+func TestRegisterRoleDoesNotMutateInput(t *testing.T) {
+	ctx := context.Background()
+	e := mustEnforcer(t, WithMemoryStore())
+	register(t, e,
+		Role{Name: "parent"},
+		Role{Name: "admin", Permissions: []Permission{{Resource: "roles", Action: "manage"}}},
+	)
+	role := Role{
+		Name:    "child",
+		Parents: []string{"parent"},
+	}
+	if err := e.RegisterRole(ctx, role); err != nil {
+		t.Fatal(err)
+	}
+	if role.Name != "child" || len(role.Parents) != 1 || role.Parents[0] != "parent" {
+		t.Fatalf("RegisterRole mutated its input: %+v", role)
+	}
+	role2 := Role{Name: "child", Permissions: []Permission{{Resource: "a", Action: "b"}}}
+	if err := e.UpdateRole(ctx, "u0", role2); err == nil {
+		t.Fatal("expected management-gated error")
+	}
+	if err := e.AssignRole(ctx, "u0", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	role3 := Role{Name: "child", Parents: []string{"parent"}}
+	if err := e.UpdateRole(ctx, "u0", role3); err != nil {
+		t.Fatal(err)
+	}
+	if role3.Name != "child" || len(role3.Parents) != 1 || role3.Parents[0] != "parent" {
+		t.Fatalf("UpdateRole mutated its input: %+v", role3)
+	}
+}
+
 func TestPostgresDialectQueries(t *testing.T) {
 	q := buildQueries(dialectPostgres, "")
 	if q.insertRole != "INSERT INTO roles (name) VALUES ($1)" {

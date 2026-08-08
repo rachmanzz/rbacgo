@@ -89,8 +89,12 @@ func (e *Enforcer) userKey(userID string) string { return e.tenant + tenantSep +
 
 func (e *Enforcer) scopeRole(role Role) Role {
 	role.Name = e.roleKey(role.Name)
-	for i, p := range role.Parents {
-		role.Parents[i] = e.roleKey(p)
+	if len(role.Parents) > 0 {
+		parents := make([]string, len(role.Parents))
+		for i, p := range role.Parents {
+			parents[i] = e.roleKey(p)
+		}
+		role.Parents = parents
 	}
 	return role
 }
@@ -321,6 +325,46 @@ func (e *Enforcer) EnforceCtx(ctx context.Context, userID, resource, action stri
 		return false, err
 	}
 	return perms[resource][action], nil
+}
+
+// EnforceOwned reports whether userID may perform action on the resource
+// owned by owner and belonging to group. Permissions may carry scopes:
+//
+//   - a plain permission (e.g. "article:delete") is "any": it allows the
+//     operation regardless of owner or group;
+//   - an explicitly scoped "article:delete:any" behaves like the plain
+//     permission;
+//   - "article:delete:self" allows the operation only when owner is userID;
+//   - "article:delete:grp:hr" allows the operation only on resources of
+//     group "hr" (department, team, project, ...);
+//   - "create:self" behaves like "create" — creation has no owner yet.
+//
+// Any matching scope grants the operation ("any" first, then the scoped
+// ones). An empty owner never satisfies ":self" (unless userID is also
+// empty) and an empty group never satisfies ":grp:". Querying a literal
+// ":self"/":grp:" action through Enforce is exact matching and ignores
+// owner/group. Errors are treated as deny.
+func (e *Enforcer) EnforceOwned(ctx context.Context, userID, owner, group, resource, action string) bool {
+	ok, err := e.EnforceOwnedCtx(ctx, userID, owner, group, resource, action)
+	return err == nil && ok
+}
+
+// EnforceOwnedCtx is like EnforceOwned but also reports the underlying error.
+func (e *Enforcer) EnforceOwnedCtx(ctx context.Context, userID, owner, group, resource, action string) (bool, error) {
+	perms, err := e.permissionsFor(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if perms[resource][action] || perms[resource][action+":any"] {
+		return true, nil
+	}
+	if perms[resource][action+":self"] && (owner == userID || action == "create") {
+		return true, nil
+	}
+	if group != "" && perms[resource][action+":grp:"+group] {
+		return true, nil
+	}
+	return false, nil
 }
 
 // PermissionView returns a user's access-rights snapshot for a

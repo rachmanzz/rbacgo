@@ -733,3 +733,54 @@ catch-all grant, and role metadata is a data-model extension.
   time).
 - Trigger for implementation: user request; each item is scoped in a PRD/ADR
   entry before work, per the P6 trigger rule.
+
+## ADR-025 — owned permissions: `:self`, `:grp`, `any`
+
+- **Date:** 2026-08-09
+- **Status:** Accepted
+- **Reference:** user request ("create, update, delete ada 2 jenis: self, any"),
+  phases P5.30; design choices confirmed with the user (action suffix,
+  owner/group as call arguments, "any wins", `create:self` = `create`,
+  group scopes the resource)
+
+### Context
+
+Create/update/delete checks often depend on who owns the resource and which
+group it belongs to. The engine only matched exact `resource` + `action`
+pairs, with no notion of an owner or group, so apps could not express
+"delete your own articles" vs "delete any article" vs "update only articles
+of department hr".
+
+### Decision
+
+- **Model:** an action may carry a scope suffix. The plain action
+  (`"article:delete"`) means **any** — allowed regardless of owner/group;
+  `"article:delete:any"` is an explicit alias for the plain action.
+  `"article:delete:self"` grants only when the resource is owned by the
+  caller; `"article:delete:grp:hr"` grants only on resources of group `hr`
+  (department, team, project, ... — the id is an opaque string compared
+  exactly). `"article:create:self"` behaves like plain `create` (creation
+  has no owner yet), while `"article:create:grp:hr"` scopes creation to the
+  target group.
+- **API:** `EnforceOwned(ctx, user, owner, group, resource, action)` and
+  `EnforceOwnedCtx`, mirroring `Enforce`/`EnforceCtx`. The owner and group
+  are supplied per call by the application (it knows the resource's owner
+  and group; the library keeps no resource→owner/group state).
+- **Matching order (per call):** plain action → `:any` alias → `:self`
+  (when `owner == userID`, or the action is `create`) → `:grp:<group>`.
+  Any matching scope grants; plain/`:any` wins over scoped ones. An empty
+  owner never satisfies `:self` and an empty group never satisfies `:grp:`.
+- **No storage or schema change:** scoped actions are ordinary action
+  strings; `validRole` already accepts them. `PermissionView` and the cache
+  (effective permission set per user) are unchanged; owner/group comparison
+  happens after the lookup, so cached sets flip correctly across calls.
+- **Literal queries** (`Enforce(ctx, u, r, "update:self")`) stay exact-match
+  and ignore owner/group — documented.
+
+### Consequences
+
+- Backward compatible: existing permissions and calls behave identically.
+- The future wildcard order (ADR-024: exact → `resource:*` → `*:action` →
+  `*:*`) composes with the scopes: a `*:delete:self` pattern would grant
+  own-resource deletes on every resource; matching order is extended
+  consistently when wildcards land.
