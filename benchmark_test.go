@@ -10,7 +10,7 @@ import (
 // in-memory LRU cache. Target: under 1 ms per decision.
 func BenchmarkCacheHit(b *testing.B) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore(), WithLRU(NewMemoryLRU(1024, time.Hour)))
+	e, err := New(WithTenant("bench"), WithMemoryStore(), WithLRU(NewMemoryLRU(1024, time.Hour)))
 	if err != nil {
 		b.Fatal(err)
 	}

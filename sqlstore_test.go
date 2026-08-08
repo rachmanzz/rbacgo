@@ -152,6 +152,104 @@ func TestEnforcerWithSQLStore(t *testing.T) {
 	}
 }
 
+func TestSQLStoreListRoles(t *testing.T) {
+	ctx := context.Background()
+	s := sqliteStore(t, ":memory:").(*sqlStore)
+	if roles, err := s.ListRoles(ctx); err != nil || len(roles) != 0 {
+		t.Fatalf("ListRoles on empty store = %v, %v; want empty", roles, err)
+	}
+	if err := s.AddRole(ctx, Role{Name: "z"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRole(ctx, Role{Name: "a", Permissions: []Permission{{Resource: "x", Action: "read"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRole(ctx, Role{Name: "m", Parents: []string{"a"}}); err != nil {
+		t.Fatal(err)
+	}
+	roles, err := s.ListRoles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roles) != 3 || roles[0].Name != "a" || roles[1].Name != "m" || roles[2].Name != "z" {
+		t.Fatalf("ListRoles = %+v, want [a m z]", roles)
+	}
+	if len(roles[1].Parents) != 1 || roles[1].Parents[0] != "a" {
+		t.Fatalf("ListRoles parents = %+v, want [a]", roles[1].Parents)
+	}
+}
+
+func TestSQLStoreUpdateRole(t *testing.T) {
+	ctx := context.Background()
+	s := sqliteStore(t, ":memory:").(*sqlStore)
+	if err := s.AddRole(ctx, Role{Name: "viewer", Permissions: []Permission{{Resource: "a", Action: "read"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRole(ctx, Role{Name: "editor", Permissions: []Permission{{Resource: "a", Action: "write"}}, Parents: []string{"viewer"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRole(ctx, Role{Name: "top", Parents: []string{"editor"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.UpdateRole(ctx, Role{}); !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("UpdateRole invalid = %v, want ErrInvalidRole", err)
+	}
+	if err := s.UpdateRole(ctx, Role{Name: "ghost"}); !errors.Is(err, ErrRoleNotFound) {
+		t.Fatalf("UpdateRole missing = %v, want ErrRoleNotFound", err)
+	}
+	if err := s.UpdateRole(ctx, Role{Name: "viewer", Parents: []string{"ghost"}}); !errors.Is(err, ErrParentNotFound) {
+		t.Fatalf("UpdateRole missing parent = %v, want ErrParentNotFound", err)
+	}
+	// editor -> viewer exists; viewer -> editor would cycle.
+	if err := s.UpdateRole(ctx, Role{Name: "viewer", Parents: []string{"editor"}}); !errors.Is(err, ErrCycleDetected) {
+		t.Fatalf("UpdateRole cycle = %v, want ErrCycleDetected", err)
+	}
+	// top -> editor -> viewer chain: updating viewer to parent top cycles too.
+	if err := s.UpdateRole(ctx, Role{Name: "viewer", Parents: []string{"top"}}); !errors.Is(err, ErrCycleDetected) {
+		t.Fatalf("UpdateRole transitive cycle = %v, want ErrCycleDetected", err)
+	}
+	// Failed updates roll back: viewer still has no parents.
+	viewer, ok, err := s.GetRole(ctx, "viewer")
+	if err != nil || !ok || len(viewer.Parents) != 0 {
+		t.Fatalf("viewer after failed updates = %+v, ok %v, err %v", viewer, ok, err)
+	}
+
+	// Successful in-place replace: permissions and parents swap entirely.
+	if err := s.UpdateRole(ctx, Role{
+		Name:        "viewer",
+		Permissions: []Permission{{Resource: "b", Action: "delete"}},
+	}); err != nil {
+		t.Fatalf("UpdateRole: %v", err)
+	}
+	got, ok, err := s.GetRole(ctx, "viewer")
+	if err != nil || !ok {
+		t.Fatalf("GetRole viewer = ok %v, err %v", ok, err)
+	}
+	if len(got.Permissions) != 1 || got.Permissions[0] != (Permission{Resource: "b", Action: "delete"}) {
+		t.Fatalf("updated permissions = %+v, want replace semantics", got.Permissions)
+	}
+	if len(got.Parents) != 0 {
+		t.Fatalf("updated parents = %+v, want none", got.Parents)
+	}
+	// Adding an acyclic parent works: top -> viewer is fine (viewer has none).
+	if err := s.UpdateRole(ctx, Role{Name: "top", Parents: []string{"viewer"}}); err != nil {
+		t.Fatalf("UpdateRole parents: %v", err)
+	}
+	got, _, _ = s.GetRole(ctx, "top")
+	if len(got.Parents) != 1 || got.Parents[0] != "viewer" {
+		t.Fatalf("top parents = %+v, want [viewer]", got.Parents)
+	}
+	// Clearing parents works too.
+	if err := s.UpdateRole(ctx, Role{Name: "top"}); err != nil {
+		t.Fatalf("UpdateRole clear: %v", err)
+	}
+	got, _, _ = s.GetRole(ctx, "top")
+	if len(got.Permissions) != 0 || len(got.Parents) != 0 {
+		t.Fatalf("top after clear = %+v, want empty", got)
+	}
+}
+
 func TestSQLiteMemoryConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 	store := sqliteStore(t, ":memory:")

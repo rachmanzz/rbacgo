@@ -26,23 +26,29 @@ func (s *sqlStore) dbStats() sql.DBStats {
 
 // sqlQueries holds the parametrized statements for one dialect.
 type sqlQueries struct {
-	createTables      string
-	insertRole        string
-	insertPerm        string
-	insertParent      string
-	assignRole        string
-	userRoles         string
-	rolePerms         string
-	roleParents       string
-	roleExists        string
-	roleInUse         string
-	deleteRole        string
-	deleteRolePerms   string
-	deleteRoleParents string
-	deleteParentLinks string
-	unassignRole      string
-	policyVersion     string
-	nextPolicyVersion string
+	createTables        string
+	insertRole          string
+	insertPerm          string
+	insertParent        string
+	assignRole          string
+	userRoles           string
+	rolePerms           string
+	roleParents         string
+	roleExists          string
+	roleInUse           string
+	deleteRole          string
+	deleteRolePerms     string
+	deleteRoleParents   string
+	deleteParentLinks   string
+	unassignRole        string
+	listRoles           string
+	listRolesByPrefix   string
+	listPerms           string
+	listPermsByPrefix   string
+	listParents         string
+	listParentsByPrefix string
+	policyVersion       string
+	nextPolicyVersion   string
 }
 
 type dialect int
@@ -184,6 +190,18 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 		unassignRole: fmt.Sprintf(
 			`DELETE FROM %s WHERE user_id = %s AND role_name = %s`,
 			userRoles, p(1), p(2)),
+		listRoles: fmt.Sprintf(
+			`SELECT name FROM %s ORDER BY name`, roles),
+		listRolesByPrefix: fmt.Sprintf(
+			`SELECT name FROM %s WHERE name LIKE %s ESCAPE '\' ORDER BY name`, roles, p(1)),
+		listPerms: fmt.Sprintf(
+			`SELECT role_name, resource, action FROM %s ORDER BY role_name`, rolePerms),
+		listPermsByPrefix: fmt.Sprintf(
+			`SELECT role_name, resource, action FROM %s WHERE role_name LIKE %s ESCAPE '\' ORDER BY role_name`, rolePerms, p(1)),
+		listParents: fmt.Sprintf(
+			`SELECT role_name, parent_name FROM %s ORDER BY role_name`, roleParents),
+		listParentsByPrefix: fmt.Sprintf(
+			`SELECT role_name, parent_name FROM %s WHERE role_name LIKE %s ESCAPE '\' ORDER BY role_name`, roleParents, p(1)),
 		policyVersion: fmt.Sprintf(
 			`SELECT value FROM %s WHERE key = 'policy'`, meta),
 		nextPolicyVersion: fmt.Sprintf(
@@ -278,6 +296,182 @@ func (s *sqlStore) GetRole(ctx context.Context, name string) (Role, bool, error)
 		role.Parents = append(role.Parents, parent)
 	}
 	return role, true, rows.Err()
+}
+
+// ListRoles returns every role in the store, alphabetically sorted. It uses
+// three bulk queries (names, permissions, parents) instead of fetching each
+// role separately, so the cost is proportional to the data, not to the number
+// of roles times queries per role.
+func (s *sqlStore) ListRoles(ctx context.Context) ([]Role, error) {
+	return s.listRolesPattern(ctx, s.sql.listRoles, s.sql.listPerms, s.sql.listParents, "")
+}
+
+// ListRolesByPrefix returns the roles whose names begin with prefix,
+// alphabetically sorted. Enforcers on shared stores use it so a single
+// tenant's listing loads only that tenant's rows.
+func (s *sqlStore) ListRolesByPrefix(ctx context.Context, prefix string) ([]Role, error) {
+	pattern := escapeLike(prefix) + "%"
+	return s.listRolesPattern(ctx, s.sql.listRolesByPrefix, s.sql.listPermsByPrefix, s.sql.listParentsByPrefix, pattern)
+}
+
+func (s *sqlStore) listRolesPattern(ctx context.Context, namesQ, permsQ, parentsQ, pattern string) ([]Role, error) {
+	names, err := s.roleNames(ctx, namesQ, pattern)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Role, 0, len(names))
+	index := make(map[string]int, len(names))
+	for i, name := range names {
+		out = append(out, Role{Name: name})
+		index[name] = i
+	}
+	if err := s.loadRolePerms(ctx, permsQ, pattern, out, index); err != nil {
+		return nil, err
+	}
+	if err := s.loadRoleParents(ctx, parentsQ, pattern, out, index); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// roleNames returns the alphabetically sorted role names (optionally limited
+// to a LIKE pattern). The result set is closed before any other query runs,
+// keeping single-connection databases (e.g. SQLite :memory:) usable.
+func (s *sqlStore) roleNames(ctx context.Context, q, pattern string) ([]string, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if pattern == "" {
+		rows, err = s.db.QueryContext(ctx, q)
+	} else {
+		rows, err = s.db.QueryContext(ctx, q, pattern)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// loadRolePerms fills roles with their permissions in one grouped query.
+func (s *sqlStore) loadRolePerms(ctx context.Context, q, pattern string, roles []Role, index map[string]int) error {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if pattern == "" {
+		rows, err = s.db.QueryContext(ctx, q)
+	} else {
+		rows, err = s.db.QueryContext(ctx, q, pattern)
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var roleName, resource, action string
+		if err := rows.Scan(&roleName, &resource, &action); err != nil {
+			return err
+		}
+		if i, ok := index[roleName]; ok {
+			roles[i].Permissions = append(roles[i].Permissions, Permission{Resource: resource, Action: action})
+		}
+	}
+	return rows.Err()
+}
+
+// loadRoleParents fills roles with their parent links in one grouped query.
+func (s *sqlStore) loadRoleParents(ctx context.Context, q, pattern string, roles []Role, index map[string]int) error {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if pattern == "" {
+		rows, err = s.db.QueryContext(ctx, q)
+	} else {
+		rows, err = s.db.QueryContext(ctx, q, pattern)
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var roleName, parent string
+		if err := rows.Scan(&roleName, &parent); err != nil {
+			return err
+		}
+		if i, ok := index[roleName]; ok {
+			roles[i].Parents = append(roles[i].Parents, parent)
+		}
+	}
+	return rows.Err()
+}
+
+// escapeLike escapes the LIKE metacharacters of s so it can be used as a
+// literal prefix in a LIKE pattern (with ESCAPE '\').
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
+// UpdateRole replaces a role's permissions and parent links atomically.
+func (s *sqlStore) UpdateRole(ctx context.Context, role Role) error {
+	if !validRole(role) {
+		return ErrInvalidRole
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	exists, err := s.roleExists(ctx, tx, role.Name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrRoleNotFound
+	}
+
+	// Replace permissions and parent links wholesale.
+	for _, q := range []string{s.sql.deleteRolePerms, s.sql.deleteRoleParents} {
+		if _, err := tx.ExecContext(ctx, q, role.Name); err != nil {
+			return err
+		}
+	}
+	for _, perm := range role.Permissions {
+		if _, err := tx.ExecContext(ctx, s.sql.insertPerm, role.Name, perm.Resource, perm.Action); err != nil {
+			return err
+		}
+	}
+	for _, parent := range role.Parents {
+		ok, err := s.roleExists(ctx, tx, parent)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrParentNotFound
+		}
+		if _, err := tx.ExecContext(ctx, s.sql.insertParent, role.Name, parent); err != nil {
+			return err
+		}
+	}
+
+	if err := s.checkCycles(ctx, tx, role.Name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *sqlStore) AssignRole(ctx context.Context, userID, roleName string) error {

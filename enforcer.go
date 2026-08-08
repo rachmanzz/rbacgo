@@ -183,6 +183,77 @@ func (e *Enforcer) UnassignRole(ctx context.Context, userID, targetUserID, roleN
 	return nil
 }
 
+// UpdateRole replaces the permissions and parents of an existing role in
+// place. Only callers holding the role-management capability may update
+// roles; anyone else gets ErrPermissionDenied. Stores that do not implement
+// role updates report ErrUnsupported. Role names cannot be changed — the
+// name identifies the role; renaming is delete-and-recreate.
+func (e *Enforcer) UpdateRole(ctx context.Context, userID string, role Role) error {
+	if err := e.requireManagement(ctx, userID); err != nil {
+		return err
+	}
+	if !validRole(role) {
+		return ErrInvalidRole
+	}
+	u, ok := e.store.(RoleUpdater)
+	if !ok {
+		return ErrUnsupported
+	}
+	if err := u.UpdateRole(ctx, e.scopeRole(role)); err != nil {
+		return err
+	}
+	e.bumpPolicyVersion(ctx)
+	e.flushCache()
+	return nil
+}
+
+// ListRoles returns all roles of this Enforcer's tenant, alphabetically
+// sorted, with names stripped of the tenant prefix. Stores that do not
+// implement role enumeration report ErrUnsupported. Stores implementing
+// RoleListerByPrefix are asked for the tenant's prefix directly, so shared
+// stores do not load every tenant's roles.
+func (e *Enforcer) ListRoles(ctx context.Context) ([]Role, error) {
+	prefix := e.tenant + tenantSep
+	var (
+		roles []Role
+		err   error
+	)
+	if lp, ok := e.store.(RoleListerByPrefix); ok {
+		roles, err = lp.ListRolesByPrefix(ctx, prefix)
+	} else {
+		l, ok := e.store.(RoleLister)
+		if !ok {
+			return nil, ErrUnsupported
+		}
+		var all []Role
+		all, err = l.ListRoles(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Cap the initial capacity: in the shared-store multi-tenant pattern
+		// the store returns every tenant's roles, so preallocating len(all)
+		// would reserve memory for roles this tenant discards.
+		out := make([]Role, 0, min(len(all), 32))
+		for _, r := range all {
+			if strings.HasPrefix(r.Name, prefix) {
+				out = append(out, r)
+			}
+		}
+		roles = out
+	}
+	if err != nil {
+		return nil, err
+	}
+	for i := range roles {
+		roles[i].Name = strings.TrimPrefix(roles[i].Name, prefix)
+		for j, p := range roles[i].Parents {
+			roles[i].Parents[j] = strings.TrimPrefix(p, prefix)
+		}
+	}
+	sort.Slice(roles, func(i, j int) bool { return roles[i].Name < roles[j].Name })
+	return roles, nil
+}
+
 // requireManagement enforces the role-management capability on userID.
 func (e *Enforcer) requireManagement(ctx context.Context, userID string) error {
 	ok, err := e.EnforceCtx(ctx, userID, e.manageRes, e.manageAct)

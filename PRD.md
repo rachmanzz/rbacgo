@@ -102,7 +102,8 @@ type User struct {
 - The engine rejects or fails registration of a role graph that contains a cycle
   (e.g. `admin -> editor -> admin`) to guarantee termination of the resolution algorithm.
 - Wildcard permissions are **out of scope** for v1; exact matching on `resource` + `action`
-  is the only matching mode.
+  is the only matching mode. Nice-to-have design agreed 2026-08-08 (ADR-024): evaluation
+  order exact → `resource:*` → `*:action` → `*:*`; `*:*` doubles as superadmin.
 
 ### Decision
 The engine returns a boolean decision for `Enforce(userID, resource, action)`:
@@ -320,7 +321,9 @@ r.Use(ginadapter.Middleware(enforcer, ginadapter.WithUserID(...)))
 
 ## 11. Open Questions / Future Work
 
-- Wildcard matching (`resource:*`, `*:read`) — defer to v2.
+- Wildcard matching (`resource:*`, `*:read`, `*:*`) — defer to v2; design recorded in ADR-024.
+- Role metadata (optional `Metadata map[string]string` on `Role`) — ADR-024.
+- Superadmin as `*:*` wildcard role (no dedicated bypass option) — ADR-024.
 - Attribute-based policies layered on roles.
 - Auto-reload / hot-swap of policies from SQL without redeploy.
 - Field/column-level authorization helpers.

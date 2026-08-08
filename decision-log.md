@@ -597,3 +597,139 @@ decided by calling convention.
   cannot leak decisions between tenants.
 - Tenant is fixed per Enforcer instance; apps needing many tenants build one
   Enforcer per tenant (the documented 100-organization pattern).
+
+## ADR-022 — role update + list (RoleUpdater/RoleLister)
+
+- **Date:** 2026-08-08
+- **Status:** Accepted
+- **Reference:** user request ("Tidak ada UpdateRole/ListRoles baru" — both
+  confirmed missing, user chose "both"), phases P5.28
+
+### Context
+
+The library could create, assign, unassign, and delete roles, but had no way
+to modify an existing role's permissions/parents without delete-and-recreate,
+and no way to enumerate roles. The user asked for both, explicitly.
+
+### Decision
+
+- `UpdateRole` is an **in-place replace**: the role identified by `Name` gets
+  its permissions and parent links swapped atomically (memory: swap-in-then
+  cycle-check with revert; SQL: one transaction deleting links, inserting new
+  ones, then `checkCycles` before commit). The name is the identity — renaming
+  is delete-and-recreate. Errors preserve the registration semantics:
+  `ErrInvalidRole`, `ErrRoleNotFound`, `ErrParentNotFound`, `ErrCycleDetected`.
+- Both operations are **optional store capabilities** (`RoleUpdater`,
+  `RoleLister`), following the `RoleDeleter`/`RoleUnassigner` precedent;
+  stores that do not implement them report `ErrUnsupported` so custom stores
+  keep working unchanged.
+- `UpdateRole` requires the role-management capability like the other
+  mutations; it bumps the policy version and flushes the cache on success.
+- `ListRoles` is tenant-scoped, returns roles alphabetically sorted with
+  unscoped names/parents, and returns defensive copies.
+
+### Consequences
+
+- Custom stores gain `UpdateRole`/`ListRoles` only if they opt in; no
+  interface break.
+- SQL stores enumerate via one `ORDER BY name` query and fetch details after
+  closing the result set (avoids a deadlock on single-connection SQLite
+  `:memory:` databases).
+- Failed updates are fully rolled back in both store implementations
+  (including the memory store's reverted cycle check).
+- **Bulk-listing hardening (2026-08-08, "memory bulking problem check").**
+  Memory-store and SQL-store `ListRoles` fetch details in bulk grouped
+  queries (3 queries total) instead of one query per role, and the new
+  optional `RoleListerByPrefix` interface lets shared stores load only the
+  caller's tenant rows (`name LIKE <escaped prefix>%`). Enforcer.ListRoles
+  prefers it and falls back to filtering `RoleLister` results, capping the
+  fallback's initial capacity. Measured on a store shared by 100 tenants × 20
+  roles, listing one tenant's 20 roles dropped from ~2,005 allocs/op
+  (memory) and ~6,066 allocs/op (SQL) to 10 and ~120 allocs/op respectively
+  — cost now scales with the tenant's roles, not the store's total.
+
+## ADR-023 — per-tenant middleware adapters
+
+- **Date:** 2026-08-08
+- **Status:** Accepted
+- **Reference:** user request ("adapter/middleware per-tenant"), phases P5.29
+
+### Context
+
+The adapters gate every request with one fixed Enforcer. Multi-tenant
+deployments (the 100-organization pattern, ADR-021) need one Enforcer per
+tenant selected from each request; tenants are provisioned lazily, and
+handlers need the selected Enforcer (PermissionView, ListRoles, ...).
+
+### Decision
+
+Design choices confirmed with the user:
+
+- **Custom resolver** — a required `WithTenantResolver(fn)` derives the
+  tenant from the request (header, subdomain, JWT claim, ...); the library
+  does not bake in a header convention.
+- **Lazy factory, cached** — `TenantRegistry` calls a factory
+  `func(tenant) (*Enforcer, error)` at most once per tenant under
+  `sync.Once` (safe under concurrent first requests), with `Clear()` to
+  re-provision (e.g. after redeployed role definitions).
+- **Context + helpers** — the resolved tenant and Enforcer are stored in the
+  request context; `TenantFromContext`/`EnforcerFromContext` expose them
+  (fiber: `c.Context()`; gin/echo: `c.Request().Context()`).
+- **Semantics** — missing/empty tenant → 401 (tenant is part of identity);
+  factory error → 500 (overridable `WithTenantEnforcerErrorHandler`);
+  enforcement denial → 403.
+- Tenant option names reuse the single-tenant surface with a `Tenant` prefix
+  (`WithTenantUserID`, ...) to avoid name collisions in the packages.
+- Applied to all four adapters: `NewTenant` (net/http), `TenantMiddleware`
+  (gin/fiber/echo).
+
+### Consequences
+
+- Multi-tenant apps keep one middleware wiring instead of per-tenant route
+  groups; tenant creation is amortized to first request and cached.
+- The resolver is app-owned: switching between header/subdomain/JWT is a
+  one-line change, and tenant resolution stays close to the auth layer.
+- Registry behavior is identical across adapters; tests cover
+  allow/401/403/500, isolation, concurrent first-use (factory called once),
+  and Clear re-provisioning in each adapter module.
+
+## ADR-024 — nice-to-have backlog: wildcard, metadata role, superadmin
+
+- **Date:** 2026-08-08
+- **Status:** Accepted (recorded; not implemented — backlog only)
+- **Reference:** user request ("Nice-to-have: wildcard, metadata role,
+  superadmin"), phases P6, limitation §1
+
+### Context
+
+The user listed three nice-to-have features and chose to record the agreed
+designs in the docs without implementing them now. The three are related:
+wildcards change enforcement matching, "superadmin" is usually just a
+catch-all grant, and role metadata is a data-model extension.
+
+### Decision (designs recorded, no code)
+
+- **Wildcard matching** — permission patterns `resource:*`, `*:read`, `*:*`
+  are evaluated in order: exact match → `resource:*` → `*:action` → `*:*`.
+  The first match wins (most specific first). Exact-match behavior is
+  unchanged, so the feature is backward compatible when it lands.
+- **Superadmin** — no dedicated option or bypass path. A role holding the
+  `*:*` permission grants everything; "superadmin" is a role, not special
+  casing. Rationale: avoids a second authorization path that could be
+  forgotten in audits.
+- **Role metadata** — `Role` gains an optional `Metadata map[string]string`
+  (description, labels, owner, ...). It is descriptive only: no effect on
+  validation, enforcement, SQL schema, or tenant scoping; the SQL store may
+  persist it later (e.g. a JSON column or `role_meta` table) without breaking
+  the API.
+
+### Consequences
+
+- No API or behavior change now; the backlog items are documented in
+  limitation.md §1 (alongside each related limitation), phases P6, PRD §10/11,
+  plan.md, and gap.md.
+- When wildcards land, `PermissionView` and cache keys are unaffected (cache
+  stores effective permission sets; wildcard expansion happens at collection
+  time).
+- Trigger for implementation: user request; each item is scoped in a PRD/ADR
+  entry before work, per the P6 trigger rule.

@@ -139,6 +139,22 @@ func TestSQLStorePostgres(t *testing.T) {
 		t.Fatalf("orphan parent error = %v, want ErrParentNotFound", err)
 	}
 
+	// ListRoles enumerates every role alphabetically on the Postgres dialect.
+	lister := store.(RoleLister)
+	all, err := lister.ListRoles(ctx)
+	if err != nil {
+		t.Fatalf("ListRoles: %v", err)
+	}
+	wantNames := []string{"pg-a", "pg-b", "pg-c", "pg::editor", "pg::viewer"}
+	if len(all) != len(wantNames) {
+		t.Fatalf("ListRoles = %d roles, want %d", len(all), len(wantNames))
+	}
+	for i, want := range wantNames {
+		if all[i].Name != want {
+			t.Fatalf("ListRoles[%d] = %q, want %q", i, all[i].Name, want)
+		}
+	}
+
 	// End-to-end enforcement via the Enforcer on top of the SQL store.
 	enforcer, err := New(WithTenant("pg"), WithStore(store))
 	if err != nil {
@@ -154,7 +170,39 @@ func TestSQLStorePostgres(t *testing.T) {
 		t.Fatal("expected deny for DELETE, got allow")
 	}
 
-	// --- Role management flow: UnassignRole / DeleteRole ---
+	// --- Role management flow: UpdateRole / UnassignRole / DeleteRole ---
+
+	updater := store.(RoleUpdater)
+	// In-place replace: permissions swap, parent links are rebuilt.
+	if err := updater.UpdateRole(ctx, Role{
+		Name:        "pg::editor",
+		Permissions: []Permission{{Resource: "/articles", Action: "DELETE"}},
+		Parents:     []string{"pg::viewer"},
+	}); err != nil {
+		t.Fatalf("UpdateRole: %v", err)
+	}
+	role, ok, err = store.GetRole(ctx, "pg::editor")
+	if err != nil || !ok {
+		t.Fatalf("GetRole editor after update: ok=%v err=%v", ok, err)
+	}
+	if len(role.Permissions) != 1 || role.Permissions[0].Action != "DELETE" {
+		t.Fatalf("editor permissions after update = %v, want replace semantics", role.Permissions)
+	}
+	// Failed updates roll back atomically: missing parent leaves the role intact.
+	if err := updater.UpdateRole(ctx, Role{Name: "pg::editor", Parents: []string{"pg-missing"}}); err != ErrParentNotFound {
+		t.Fatalf("UpdateRole missing parent error = %v, want ErrParentNotFound", err)
+	}
+	// Cycle rejection: viewer -> editor would close editor -> viewer.
+	if err := updater.UpdateRole(ctx, Role{Name: "pg::viewer", Parents: []string{"pg::editor"}}); err != ErrCycleDetected {
+		t.Fatalf("UpdateRole cycle error = %v, want ErrCycleDetected", err)
+	}
+	viewer, ok, err = store.GetRole(ctx, "pg::viewer")
+	if err != nil || !ok || len(viewer.Parents) != 0 {
+		t.Fatalf("viewer after failed updates = %+v ok=%v err=%v, want untouched", viewer, ok, err)
+	}
+	if viewer.Permissions == nil {
+		t.Fatalf("viewer permissions must survive the failed update: %+v", viewer.Permissions)
+	}
 
 	if err := unassign.UnassignRole(ctx, "pg::pg-user", "pg::editor"); err != nil {
 		t.Fatalf("UnassignRole: %v", err)

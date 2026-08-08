@@ -459,7 +459,13 @@ memory store so mutations no longer scan.
 **Reference:** PRD §10 Future, §11; limitation §1; decision-log ADR-004.
 
 ### Tasks (not yet scheduled)
-- Wildcard permissions (`resource:*`, `*:read`) — target v2.
+- Wildcard permissions (`resource:*`, `*:read`, `*:*`) — target v2. Design
+  agreed 2026-08-08 (ADR-024): evaluation order exact match → `resource:*` →
+  `*:action` → `*:*`; a role holding `*:*` acts as superadmin; exact-match
+  behavior unchanged.
+- Role metadata — optional `Metadata map[string]string` on `Role`
+  (ADR-024): descriptive only, no effect on validation, enforcement, SQL
+  schema, or tenant scoping.
 - ABAC / attribute-based policies layered on roles.
 - Auto-reload / hot-swap of policies from SQL.
 - Per-field (column-level) authorization helpers.
@@ -499,3 +505,86 @@ lainnya), yang pasti di-assign oleh owner/admin org tersebut." Implemented.
       integration and Redis 7 live tenant sanity run — all green.
 - [x] Commit + push — **only on explicit user request** (AGENTS.md); pending
       user command.
+
+### role update + list (P5.28, 2026-08-08)
+
+User request: "Tidak ada UpdateRole/ListRoles baru" — both were missing; user
+chose "both". Implemented.
+
+- [x] `RoleUpdater` + `RoleLister` optional store interfaces (store.go),
+      mirroring `RoleDeleter`/`RoleUnassigner`; stores without them report
+      `ErrUnsupported`.
+- [x] `Enforcer.UpdateRole(ctx, userID, role)` — management-gated in-place
+      replace of permissions + parents, atomic; rejects `ErrInvalidRole`,
+      `ErrRoleNotFound`, `ErrParentNotFound`, `ErrCycleDetected`; bumps policy
+      version + flushes cache on success; name is the key (rename =
+      delete-and-recreate).
+- [x] `Enforcer.ListRoles(ctx)` — tenant-scoped, alphabetically sorted,
+      names/parents unscoped, defensive copies.
+- [x] `memoryStore` update with swap-in-then-check cycle detection (detectCycle
+      must see the new parents) and revert-on-failure; SQL store update in one
+      transaction (delete links → insert new → checkCycles → commit).
+- [x] SQL `listRoles` query (ORDER BY name); sqlite deadlock fix — detail rows
+      fetched after the result set closes (single-connection `:memory:`).
+- [x] Tests: enforcer flow, tenant isolation, unsupported/error-path stores,
+      mock-driver error paths for every SQL statement, PG integration
+      (ListRoles order, UpdateRole replace/rollback/cycle), closed-db paths.
+- [x] Bulk-listing hardening (2026-08-08): SQL `ListRoles` fetches
+      perms/parents in 2 grouped queries (no per-role GetRole); new optional
+      `RoleListerByPrefix` (store.go) with `ListRolesByPrefix` on both stores
+      (`name LIKE <escaped prefix>%`), preferred by `Enforcer.ListRoles`;
+      fallback filter path caps its preallocation. Measured on 100 tenants ×
+      20 roles shared store: listing one tenant's 20 roles dropped from
+      ~2,005 allocs/op (memory) and ~6,066 allocs/op (SQL) to 10 and ~120.
+      LIKE metacharacters (`%`, `_`, `\`) escaped; tests for the fallback,
+      prefix error path, and escaping added; coverage stays 100.0%.
+- [x] Docs: README Role management (UpdateRole/ListRoles, rules updated),
+      ADR-022.
+- [x] Verified: `go test -race`, `go vet`, gofmt, coverage 100.0%; PG17.9 live
+      integration green; live Redis 7 sanity (cache flush + list on shared
+      store) green; adapters + examples build and test green.
+- [x] Commit + push — **only on explicit user request** (AGENTS.md); pending
+      user command.
+
+### per-tenant adapters (P5.29, 2026-08-08)
+
+User request: "adapter/middleware per-tenant". Design choices confirmed with
+the user: custom resolver function for tenant extraction, lazy-create factory
+cached per tenant, context + helpers for handlers, 401 for unknown tenant.
+
+- [x] `TenantRegistry` in every adapter (http/gin/fiber/echo): lazy
+      factory per tenant under `sync.Once` (one creation even under
+      concurrency), `Get`, `Clear`; nil factory panics.
+- [x] Per-tenant middleware: `NewTenant` (net/http) / `TenantMiddleware`
+      (gin/fiber/echo). Tenant options prefixed `WithTenant*` (resolver
+      required, userID required; resource/action + 401/403/500 handlers
+      overridable). Unknown/empty tenant → 401; factory error → 500
+      (`WithTenantEnforcerErrorHandler`); denial → 403.
+- [x] Tenant + Enforcer stored in request context; helpers
+      `TenantFromContext`/`EnforcerFromContext` per adapter (fiber
+      `c.Context()`, gin/echo `c.Request().Context()`).
+- [x] Tests per adapter: allow/401/403/500, tenant isolation across shared
+      store, factory cached + concurrent first-use (exactly once),
+      `Clear` re-provisions, context helpers, panic paths.
+- [x] Docs: README per-tenant middleware section, ADR-023.
+- [x] Verified: `go test -race`, `go vet`, gofmt per adapter module; root
+      module unaffected (all green).
+- [x] Commit + push — **only on explicit user request** (AGENTS.md); pending
+      user command.
+
+### nice-to-have backlog: wildcard, metadata role, superadmin (2026-08-08)
+
+User request: "Nice-to-have: wildcard, metadata role, superadmin". User
+decision: **document only — no code**. Designs recorded (ADR-024) for the P6
+backlog:
+
+- [x] Wildcard matching: `resource:*`, `*:read`, `*:*`; evaluation order exact
+      → `resource:*` → `*:action` → `*:*`; exact-match behavior unchanged
+      (backward compatible).
+- [x] Superadmin: no dedicated option; a role holding `*:*` grants everything.
+- [x] Role metadata: optional `Metadata map[string]string` on `Role`;
+      descriptive only — no effect on validation, enforcement, SQL schema,
+      or tenant scoping.
+- [x] Docs updated: limitation.md §1 (design noted next to each limitation),
+      phases P6 task list, PRD §10/11, plan.md v2 line, gap.md, ADR-024.
+- [x] No code changes; root module + adapters untouched.

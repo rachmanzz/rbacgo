@@ -141,14 +141,25 @@ err := enforcer.RegisterRole(ctx, rbacgo.Role{Name: "admin", Parents: []string{"
 
 ## Role management
 
-Roles can be deleted and unassigned from users. Because these operations are
-privileged, they require the caller to hold a **role-management capability**:
-the permission `("roles", "manage")` by default (override with
-`WithRoleManagementPermission("acl", "manage")`). A caller without the
-capability gets `ErrPermissionDenied`.
+Roles can be updated, deleted, unassigned from users, and enumerated. Because
+mutations are privileged, they require the caller to hold a
+**role-management capability**: the permission `("roles", "manage")` by
+default (override with `WithRoleManagementPermission("acl", "manage")`). A
+caller without the capability gets `ErrPermissionDenied`.
 
 ```go
 // Only callers holding ("roles", "manage") may run these.
+err := enforcer.UpdateRole(ctx, "admin-user", Role{
+	Name:        "editor",
+	Permissions: []Permission{{Resource: "/articles", Action: "DELETE"}},
+	Parents:     []string{"viewer"},
+})
+// ErrParentNotFound   -> a parent does not exist
+// ErrCycleDetected    -> the new parents would close a hierarchy cycle
+// ErrPermissionDenied -> caller lacks the role-management capability
+
+roles, err := enforcer.ListRoles(ctx) // all roles of this tenant, sorted
+
 err := enforcer.DeleteRole(ctx, "admin-user", "editor")
 // ErrRoleInUse  -> editor is still assigned to at least one user
 // ErrPermissionDenied -> caller lacks the role-management capability
@@ -163,16 +174,22 @@ err = enforcer.DeleteRole(ctx, "admin-user", "editor") // now succeeds
 
 Rules:
 
-1. **Delete is protected** — a role still assigned to any user cannot be deleted
+1. **Update is an in-place replace** — the permissions and parent links of the
+   role identified by `Name` are swapped atomically; the name itself cannot
+   change (renaming is delete-and-recreate). Failed updates (missing parent,
+   cycle, store error) roll back completely.
+2. **Delete is protected** — a role still assigned to any user cannot be deleted
    (`ErrRoleInUse`). Unassign it first.
-2. **Deleting a parent cascades** — child roles automatically lose the deleted
+3. **Deleting a parent cascades** — child roles automatically lose the deleted
    role from their parent list; their own permissions and assignments remain.
-3. **Cache invalidation** — successful deletions flush the whole lookup cache;
+4. **Cache invalidation** — successful mutations flush the whole lookup cache;
    unassignments drop the target user's cache entry immediately.
-4. **Store support** — `DeleteRole`/`UnassignRole` are optional store
-   capabilities (`RoleDeleter`/`RoleUnassigner` interfaces). Stores that do not
-   implement them report `ErrUnsupported`, so existing custom stores keep
-   working unchanged.
+5. **Store support** — `UpdateRole`/`DeleteRole`/`UnassignRole`/`ListRoles` are
+   optional store capabilities (`RoleUpdater`/`RoleDeleter`/`RoleUnassigner`/
+   `RoleLister` interfaces). Stores that do not implement them report
+   `ErrUnsupported`, so existing custom stores keep working unchanged.
+6. **Listing is tenant-scoped** — `ListRoles` returns only the roles of the
+   enforcer's tenant, with names and parents returned unscoped.
 
 ## Exposing permissions to a frontend
 
@@ -245,6 +262,57 @@ All adapters share the same options: user-ID extraction (`WithUserID` —
 your auth layer, e.g. session, JWT claims, or auth middleware context),
 resource/action derivation (default: URL path + HTTP method), and customizable
 401/403 responses.
+
+### Per-tenant middleware
+
+The single-tenant middlewares gate every request with one fixed Enforcer. For
+multi-tenant deployments (the documented pattern of one Enforcer per tenant
+sharing one store), every adapter also ships a **per-tenant variant**: a
+`TenantRegistry` lazily creates and caches one Enforcer per tenant (the
+factory runs at most once per tenant, even under concurrent first requests),
+and the middleware resolves the tenant from each request, fetches its
+Enforcer, stores both in the request context, and enforces with the tenant's
+Enforcer:
+
+```go
+import httpadapter "github.com/rachmanzz/rbacgo/http"
+
+registry := httpadapter.NewTenantRegistry(func(tenant string) (*rbacgo.Enforcer, error) {
+	return rbacgo.New(rbacgo.WithTenant(tenant), rbacgo.WithStore(sharedStore))
+})
+
+guard := httpadapter.NewTenant(registry,
+	httpadapter.WithTenantResolver(func(r *http.Request) (string, bool) {
+		t := r.Header.Get("X-Tenant-ID") // subdomain, JWT claim, ... your choice
+		return t, t != ""
+	}),
+	httpadapter.WithTenantUserID(func(r *http.Request) (string, bool) {
+		id := jwtFromRequest(r)
+		return id, id != ""
+	}),
+)
+
+// handlers read the resolved tenant + Enforcer (PermissionView, ListRoles, ...):
+tenantID, _ := httpadapter.TenantFromContext(r.Context())
+enf, _ := httpadapter.EnforcerFromContext(r.Context())
+```
+
+Tenant option names mirror the single-tenant ones with a `Tenant` prefix
+(`WithTenantResolver`, `WithTenantUserID`, `WithTenantResourceAction`,
+`WithTenantUnauthorizedHandler`, `WithTenantDeniedHandler`,
+`WithTenantEnforcerErrorHandler`). The factory is the provisioning point: it
+runs under a per-tenant `sync.Once`, so a tenant is created exactly once even
+under concurrent load; `registry.Clear()` forgets all cached Enforcers so the next request
+re-provisions a tenant (e.g. after redeploying role definitions).
+`NewTenantRegistry` panics on a nil factory, as the middlewares panic on
+missing required options. The net/http variant is built with `NewTenant`;
+gin/fiber/echo expose the same middleware as `TenantMiddleware`. Context
+helpers are `TenantFromContext`/`EnforcerFromContext` in every adapter
+(fiber: read from `c.Context()`; gin/echo: from `c.Request().Context()`).
+
+Response semantics: a missing or empty tenant is unauthenticated (401, same
+as a missing user); a factory error is a server error (500, overridable with
+`WithTenantEnforcerErrorHandler`); a tenant-scoped denial is 403.
 
 ### net/http (also Chi)
 

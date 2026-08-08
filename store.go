@@ -39,6 +39,35 @@ type RoleUnassigner interface {
 	UnassignRole(ctx context.Context, userID, roleName string) error
 }
 
+// RoleLister is optionally implemented by stores that can enumerate roles.
+// Enforcer.ListRoles reports ErrUnsupported for stores that do not implement
+// it (nor RoleListerByPrefix).
+type RoleLister interface {
+	// ListRoles returns all roles in the store.
+	ListRoles(ctx context.Context) ([]Role, error)
+}
+
+// RoleListerByPrefix is optionally implemented by stores that can enumerate
+// the roles whose names begin with a prefix. Enforcers prefer it over
+// RoleLister when listing one tenant's roles on a store shared by many
+// tenants: the store then loads only the matching rows instead of every
+// tenant's roles.
+type RoleListerByPrefix interface {
+	// ListRolesByPrefix returns the roles whose names begin with prefix.
+	ListRolesByPrefix(ctx context.Context, prefix string) ([]Role, error)
+}
+
+// RoleUpdater is optionally implemented by stores that support replacing a
+// role's permissions and parent links in place. Enforcer.UpdateRole reports
+// ErrUnsupported for stores that do not implement it.
+type RoleUpdater interface {
+	// UpdateRole replaces the permissions and parents of the role identified
+	// by role.Name. It must return ErrRoleNotFound when the role does not
+	// exist, ErrParentNotFound for a missing parent, and ErrCycleDetected
+	// when the new parents would create a cycle.
+	UpdateRole(ctx context.Context, role Role) error
+}
+
 // PolicyVersioner is optionally implemented by stores that persist a shared
 // policy version (e.g. a SQL meta table). Multi-instance deployments agree on
 // one version through the store; stores that do not implement it fall back to

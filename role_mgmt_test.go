@@ -98,6 +98,9 @@ func TestMemoryStoreAddRoleInvalid(t *testing.T) {
 	if err := s.AddRole(testCtx(), Role{}); !errors.Is(err, ErrInvalidRole) {
 		t.Fatalf("AddRole = %v, want ErrInvalidRole", err)
 	}
+	if err := s.UpdateRole(testCtx(), Role{}); !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("UpdateRole = %v, want ErrInvalidRole", err)
+	}
 }
 
 func TestMemoryStoreDeleteRoleNotFound(t *testing.T) {
@@ -455,5 +458,327 @@ func TestWithRoleManagementPermissionInvalid(t *testing.T) {
 	}
 	if _, err := New(WithRoleManagementPermission("roles", "  ")); err == nil {
 		t.Fatal("blank action must be rejected")
+	}
+}
+
+// failUpdateRoleStore implements RoleUpdater but always errors, so the
+// Enforcer propagates store failures.
+type failUpdateRoleStore struct {
+	Store
+}
+
+func (failUpdateRoleStore) UpdateRole(context.Context, Role) error { return errTest }
+
+// failListRolesStore implements RoleLister but always errors.
+type failListRolesStore struct {
+	Store
+}
+
+func (failListRolesStore) ListRoles(context.Context) ([]Role, error) { return nil, errTest }
+
+func TestUpdateRole(t *testing.T) {
+	ctx := context.Background()
+	e := mustEnforcer(t, WithMemoryStore())
+	register(t, e,
+		Role{Name: "manager", Permissions: []Permission{{Resource: "roles", Action: "manage"}}},
+		Role{Name: "viewer", Permissions: []Permission{{Resource: "articles", Action: "read"}}},
+		Role{Name: "editor", Permissions: []Permission{{Resource: "articles", Action: "write"}}, Parents: []string{"viewer"}},
+	)
+	if err := e.AssignRole(ctx, "admin", "manager"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AssignRole(ctx, "u1", "editor"); err != nil {
+		t.Fatal(err)
+	}
+	if !e.Enforce(ctx, "u1", "articles", "write") {
+		t.Fatal("u1 should hold editor perms")
+	}
+	if _, err := e.PermissionView(ctx, "u1"); err != nil {
+		t.Fatalf("PermissionView: %v", err)
+	}
+
+	// Non-managers cannot update roles.
+	if err := e.UpdateRole(ctx, "u1", Role{Name: "viewer", Permissions: []Permission{{Resource: "articles", Action: "delete"}}}); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("UpdateRole by non-manager = %v, want ErrPermissionDenied", err)
+	}
+	// Invalid roles are rejected before touching the store.
+	if err := e.UpdateRole(ctx, "admin", Role{}); !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("UpdateRole invalid = %v, want ErrInvalidRole", err)
+	}
+	// Unknown roles cannot be updated.
+	if err := e.UpdateRole(ctx, "admin", Role{Name: "ghost"}); !errors.Is(err, ErrRoleNotFound) {
+		t.Fatalf("UpdateRole missing = %v, want ErrRoleNotFound", err)
+	}
+	// Missing parents are rejected.
+	if err := e.UpdateRole(ctx, "admin", Role{Name: "viewer", Parents: []string{"ghost"}}); !errors.Is(err, ErrParentNotFound) {
+		t.Fatalf("UpdateRole missing parent = %v, want ErrParentNotFound", err)
+	}
+	// Cycles are rejected: editor -> viewer exists, so viewer -> editor would cycle.
+	if err := e.UpdateRole(ctx, "admin", Role{Name: "viewer", Parents: []string{"editor"}}); !errors.Is(err, ErrCycleDetected) {
+		t.Fatalf("UpdateRole cycle = %v, want ErrCycleDetected", err)
+	}
+
+	// A successful update replaces permissions and parents in place.
+	if err := e.UpdateRole(ctx, "admin", Role{
+		Name:        "viewer",
+		Permissions: []Permission{{Resource: "articles", Action: "read"}, {Resource: "articles", Action: "delete"}},
+	}); err != nil {
+		t.Fatalf("UpdateRole: %v", err)
+	}
+	if !e.Enforce(ctx, "u1", "articles", "delete") {
+		t.Fatal("u1 must see the updated permissions immediately (cache flushed)")
+	}
+	if !e.Enforce(ctx, "u1", "articles", "write") {
+		t.Fatal("u1 must keep editor permissions")
+	}
+}
+
+func TestUpdateRoleUnsupportedStore(t *testing.T) {
+	ctx := context.Background()
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.UpdateRole(ctx, "user", Role{Name: "viewer"}); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("UpdateRole = %v, want ErrPermissionDenied", err)
+	}
+	if err := e.UpdateRole(ctx, "admin", Role{Name: "viewer"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("UpdateRole = %v, want ErrUnsupported", err)
+	}
+	if err := e.UpdateRole(ctx, "broken", Role{Name: "viewer"}); !errors.Is(err, errTest) {
+		t.Fatalf("UpdateRole = %v, want capability-check error", err)
+	}
+}
+
+func TestUpdateRoleStoreError(t *testing.T) {
+	ctx := context.Background()
+	ms := NewMemoryStore()
+	if err := ms.AddRole(ctx, Role{Name: "t::manager", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ms.AddRole(ctx, Role{Name: "t::viewer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ms.AssignRole(ctx, "t::admin", "t::manager"); err != nil {
+		t.Fatal(err)
+	}
+	e := mustEnforcer(t, WithStore(failUpdateRoleStore{Store: ms}))
+	if err := e.UpdateRole(ctx, "admin", Role{Name: "viewer"}); !errors.Is(err, errTest) {
+		t.Fatalf("UpdateRole = %v, want store error", err)
+	}
+}
+
+func TestUpdateRoleTenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	ms := NewMemoryStore()
+	eA, err := New(WithTenant("a"), WithStore(ms))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eB, err := New(WithTenant("b"), WithStore(ms))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := Role{Name: "manager", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}
+	for _, e := range []*Enforcer{eA, eB} {
+		register(t, e, manager, Role{Name: "viewer", Permissions: []Permission{{Resource: "articles", Action: "read"}}})
+		if err := e.AssignRole(ctx, "admin", "manager"); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.AssignRole(ctx, "alice", "viewer"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := eA.UpdateRole(ctx, "admin", Role{Name: "viewer", Permissions: []Permission{{Resource: "articles", Action: "delete"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !eA.Enforce(ctx, "alice", "articles", "delete") {
+		t.Fatal("tenant a must see its updated viewer")
+	}
+	if eA.Enforce(ctx, "alice", "articles", "read") {
+		t.Fatal("tenant a's viewer must have its permissions replaced")
+	}
+	if eB.Enforce(ctx, "alice", "articles", "delete") {
+		t.Fatal("tenant b's viewer must be unaffected by tenant a's update")
+	}
+	if !eB.Enforce(ctx, "alice", "articles", "read") {
+		t.Fatal("tenant b's viewer must keep its own permissions")
+	}
+}
+
+func TestListRoles(t *testing.T) {
+	ctx := context.Background()
+	e := mustEnforcer(t, WithMemoryStore())
+	register(t, e,
+		Role{Name: "viewer", Permissions: []Permission{{Resource: "articles", Action: "read"}}},
+		Role{Name: "editor", Permissions: []Permission{{Resource: "articles", Action: "write"}}, Parents: []string{"viewer"}},
+		Role{Name: "admin", Permissions: []Permission{{Resource: "roles", Action: "manage"}}},
+	)
+	roles, err := e.ListRoles(ctx)
+	if err != nil {
+		t.Fatalf("ListRoles: %v", err)
+	}
+	if len(roles) != 3 {
+		t.Fatalf("ListRoles = %d roles, want 3", len(roles))
+	}
+	// Alphabetical order, names unscoped.
+	if roles[0].Name != "admin" || roles[1].Name != "editor" || roles[2].Name != "viewer" {
+		t.Fatalf("ListRoles order/names = %+v", roles)
+	}
+	if len(roles[1].Parents) != 1 || roles[1].Parents[0] != "viewer" {
+		t.Fatalf("ListRoles parents not unscoped: %+v", roles[1].Parents)
+	}
+	// Mutating the result must not corrupt the store.
+	roles[0].Permissions = append(roles[0].Permissions, Permission{Resource: "HACKED", Action: "admin"})
+	again, _ := e.ListRoles(ctx)
+	if len(again[0].Permissions) != 1 {
+		t.Fatal("ListRoles result must be a defensive copy")
+	}
+}
+
+func TestListRolesUnsupportedStore(t *testing.T) {
+	ctx := context.Background()
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := e.ListRoles(ctx); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("ListRoles = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestListRolesStoreError(t *testing.T) {
+	ctx := context.Background()
+	e := mustEnforcer(t, WithStore(failListRolesStore{Store: NewMemoryStore()}))
+	if _, err := e.ListRoles(ctx); !errors.Is(err, errTest) {
+		t.Fatalf("ListRoles = %v, want store error", err)
+	}
+}
+
+func TestListRolesPrefixStoreError(t *testing.T) {
+	ctx := context.Background()
+	e := mustEnforcer(t, WithStore(failPrefixListStore{Store: NewMemoryStore()}))
+	if _, err := e.ListRoles(ctx); !errors.Is(err, errTest) {
+		t.Fatalf("ListRoles = %v, want prefix-store error", err)
+	}
+}
+
+func TestListRolesTenantScoped(t *testing.T) {
+	ctx := context.Background()
+	ms := NewMemoryStore()
+	eA, err := New(WithTenant("a"), WithStore(ms))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eB, err := New(WithTenant("b"), WithStore(ms))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []*Enforcer{eA, eB} {
+		register(t, e,
+			Role{Name: "viewer", Permissions: []Permission{{Resource: "articles", Action: "read"}}},
+			Role{Name: "editor", Parents: []string{"viewer"}},
+		)
+	}
+	if err := eA.RegisterRole(ctx, Role{Name: "a-only"}); err != nil {
+		t.Fatal(err)
+	}
+	rolesA, err := eA.ListRoles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolesA) != 3 || rolesA[0].Name != "a-only" || rolesA[2].Name != "viewer" {
+		t.Fatalf("ListRoles(a) = %+v, want exactly a's roles", rolesA)
+	}
+	rolesB, err := eB.ListRoles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolesB) != 2 || rolesB[0].Name != "editor" || rolesB[1].Name != "viewer" {
+		t.Fatalf("ListRoles(b) = %+v, want exactly b's roles", rolesB)
+	}
+	if rolesB[0].Parents[0] != "viewer" {
+		t.Fatalf("ListRoles(b) parents = %+v, want unscoped [viewer]", rolesB[0].Parents)
+	}
+}
+
+// listOnlyStore wraps a memory store but exposes only the plain RoleLister
+// capability, forcing Enforcer.ListRoles onto its filter-and-unscope fallback.
+type listOnlyStore struct{ Store }
+
+func (s listOnlyStore) ListRoles(ctx context.Context) ([]Role, error) {
+	l, ok := s.Store.(RoleLister)
+	if !ok {
+		return nil, ErrUnsupported
+	}
+	return l.ListRoles(ctx)
+}
+
+// failPrefixListStore implements RoleListerByPrefix but always errors.
+type failPrefixListStore struct{ Store }
+
+func (failPrefixListStore) ListRolesByPrefix(context.Context, string) ([]Role, error) {
+	return nil, errTest
+}
+
+func TestListRolesPlainRoleListerFallback(t *testing.T) {
+	ctx := context.Background()
+	eA, err := New(WithTenant("a"), WithStore(listOnlyStore{Store: NewMemoryStore()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eB, err := New(WithTenant("b"), WithStore(listOnlyStore{Store: eA.Store()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	register(t, eA,
+		Role{Name: "viewer", Permissions: []Permission{{Resource: "articles", Action: "read"}}},
+		Role{Name: "editor", Parents: []string{"viewer"}},
+	)
+	if err := eB.RegisterRole(ctx, Role{Name: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	rolesA, err := eA.ListRoles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolesA) != 2 || rolesA[0].Name != "editor" || rolesA[1].Name != "viewer" {
+		t.Fatalf("ListRoles(a) = %+v, want a's roles only", rolesA)
+	}
+	if rolesA[0].Parents[0] != "viewer" {
+		t.Fatalf("ListRoles(a) parents = %+v, want unscoped [viewer]", rolesA[0].Parents)
+	}
+	rolesA[1].Permissions = append(rolesA[1].Permissions, Permission{Resource: "HACKED", Action: "admin"})
+	if again, _ := eA.ListRoles(ctx); len(again[1].Permissions) != 1 {
+		t.Fatal("fallback ListRoles result must be a defensive copy")
+	}
+}
+
+func TestListRolesByPrefixEscapesLikeMeta(t *testing.T) {
+	ctx := context.Background()
+	s := sqliteStore(t, ":memory:")
+	eUnderscore, err := New(WithTenant("a_b"), WithStore(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eWildcard, err := New(WithTenant("a%b"), WithStore(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eNeighbour, err := New(WithTenant("axb"), WithStore(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []*Enforcer{eUnderscore, eWildcard, eNeighbour} {
+		if err := e.RegisterRole(ctx, Role{Name: "viewer"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roles, err := eUnderscore.ListRoles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roles) != 1 || roles[0].Name != "viewer" {
+		t.Fatalf("ListRoles(a_b) = %+v, want exactly a_b's roles (LIKE metachar escaped)", roles)
 	}
 }

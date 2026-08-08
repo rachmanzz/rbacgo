@@ -267,6 +267,222 @@ func TestSQLStoreGetRoleParentsQueryError(t *testing.T) {
 	}
 }
 
+func TestSQLStoreListRolesMockErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("list query error", func(t *testing.T) {
+		s := newMockSQLStore(mockStep{queryErr: errTest})
+		if _, err := s.ListRoles(ctx); !errors.Is(err, errTest) {
+			t.Fatalf("ListRoles = %v, want query error", err)
+		}
+	})
+
+	t.Run("name scan error", func(t *testing.T) {
+		s := newMockSQLStore(mockStep{cols: 3, rows: 1, val: "x"})
+		if _, err := s.ListRoles(ctx); err == nil {
+			t.Error("expected scan error")
+		}
+	})
+
+	t.Run("rows iteration error", func(t *testing.T) {
+		s := newMockSQLStore(mockStep{cols: 1, rows: 1, stepErr: errTest})
+		if _, err := s.ListRoles(ctx); !errors.Is(err, errTest) {
+			t.Fatalf("ListRoles = %v, want rows iteration error", err)
+		}
+	})
+
+	t.Run("perms query error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: "r"},
+			mockStep{queryErr: errTest},
+		)
+		if _, err := s.ListRoles(ctx); !errors.Is(err, errTest) {
+			t.Fatalf("ListRoles = %v, want perms query error", err)
+		}
+	})
+
+	t.Run("perms scan error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: "r"},
+			mockStep{cols: 2, rows: 1, val: "x"},
+		)
+		if _, err := s.ListRoles(ctx); err == nil {
+			t.Error("expected perms scan error")
+		}
+	})
+
+	t.Run("perms iteration error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: "r"},
+			mockStep{cols: 3, rows: 1, stepErr: errTest},
+		)
+		if _, err := s.ListRoles(ctx); !errors.Is(err, errTest) {
+			t.Fatalf("ListRoles = %v, want perms iteration error", err)
+		}
+	})
+
+	t.Run("parents query error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: "r"},
+			mockStep{cols: 3, rows: 0},
+			mockStep{queryErr: errTest},
+		)
+		if _, err := s.ListRoles(ctx); !errors.Is(err, errTest) {
+			t.Fatalf("ListRoles = %v, want parents query error", err)
+		}
+	})
+
+	t.Run("parents scan error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: "r"},
+			mockStep{cols: 3, rows: 0},
+			mockStep{cols: 3, rows: 1, val: "x"},
+		)
+		if _, err := s.ListRoles(ctx); err == nil {
+			t.Error("expected parents scan error")
+		}
+	})
+
+	t.Run("parents iteration error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: "r"},
+			mockStep{cols: 3, rows: 0},
+			mockStep{cols: 2, rows: 1, stepErr: errTest},
+		)
+		if _, err := s.ListRoles(ctx); !errors.Is(err, errTest) {
+			t.Fatalf("ListRoles = %v, want parents iteration error", err)
+		}
+	})
+
+	t.Run("role without perms or parents", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: "r"},
+			mockStep{cols: 3, rows: 0},
+			mockStep{cols: 2, rows: 0},
+		)
+		roles, err := s.ListRoles(ctx)
+		if err != nil || len(roles) != 1 || roles[0].Name != "r" {
+			t.Fatalf("ListRoles = %v, %v; want [r]", roles, err)
+		}
+		if len(roles[0].Permissions) != 0 || len(roles[0].Parents) != 0 {
+			t.Fatalf("role must stay empty: %+v", roles[0])
+		}
+	})
+}
+
+func TestSQLStoreUpdateRoleMockErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	role := Role{Name: "r", Permissions: []Permission{{Resource: "x", Action: "y"}}, Parents: []string{"p"}}
+
+	t.Run("invalid role", func(t *testing.T) {
+		s := newMockSQLStore()
+		if err := s.UpdateRole(ctx, Role{Name: ""}); !errors.Is(err, ErrInvalidRole) {
+			t.Fatalf("UpdateRole = %v, want ErrInvalidRole", err)
+		}
+	})
+
+	t.Run("BeginTx error", func(t *testing.T) {
+		sharedMock.beginErr = errTest
+		defer func() { sharedMock.beginErr = nil }()
+		s := newMockSQLStore()
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, errTest) {
+			t.Fatalf("UpdateRole = %v, want BeginTx error", err)
+		}
+	})
+
+	t.Run("roleExists in-tx error", func(t *testing.T) {
+		s := newMockSQLStore(mockStep{queryErr: errTest})
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, errTest) {
+			t.Fatalf("UpdateRole = %v, want roleExists error", err)
+		}
+	})
+
+	t.Run("role not found", func(t *testing.T) {
+		s := newMockSQLStore(mockStep{cols: 1, rows: 1, val: int64(0)})
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, ErrRoleNotFound) {
+			t.Fatalf("UpdateRole = %v, want ErrRoleNotFound", err)
+		}
+	})
+
+	t.Run("deleteRoleParents exec error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{},
+			mockStep{execErr: errTest},
+		)
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, errTest) {
+			t.Fatalf("UpdateRole = %v, want deleteRoleParents error", err)
+		}
+	})
+
+	t.Run("insertPerm exec error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{},
+			mockStep{},
+			mockStep{execErr: errTest},
+		)
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, errTest) {
+			t.Fatalf("UpdateRole = %v, want insertPerm error", err)
+		}
+	})
+
+	t.Run("parent roleExists error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{},
+			mockStep{},
+			mockStep{},
+			mockStep{queryErr: errTest},
+		)
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, errTest) {
+			t.Fatalf("UpdateRole = %v, want parent existence error", err)
+		}
+	})
+
+	t.Run("parent not found", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{},
+			mockStep{},
+			mockStep{},
+			mockStep{cols: 1, rows: 1, val: int64(0)},
+		)
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, ErrParentNotFound) {
+			t.Fatalf("UpdateRole = %v, want ErrParentNotFound", err)
+		}
+	})
+
+	t.Run("insertParent exec error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{},
+			mockStep{},
+			mockStep{},
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{execErr: errTest},
+		)
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, errTest) {
+			t.Fatalf("UpdateRole = %v, want insertParent error", err)
+		}
+	})
+
+	t.Run("checkCycles error", func(t *testing.T) {
+		s := newMockSQLStore(
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{},
+			mockStep{},
+			mockStep{},
+			mockStep{cols: 1, rows: 1, val: int64(1)},
+			mockStep{},
+			mockStep{queryErr: errTest},
+		)
+		if err := s.UpdateRole(ctx, role); !errors.Is(err, errTest) {
+			t.Fatalf("UpdateRole = %v, want checkCycles error", err)
+		}
+	})
+}
+
 func TestSQLStoreCheckCyclesDetectsCycle(t *testing.T) {
 	ctx := context.Background()
 	s := &sqlStore{sql: buildQueries(dialectSQLite, "")}

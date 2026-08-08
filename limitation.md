@@ -8,7 +8,16 @@
 - **RBAC only.** No ABAC / attribute-based policy rules. Decisions are based solely on
   role membership and exact `resource` + `action` matching.
 - **No wildcard permissions.** Patterns such as `resource:*` or `*:read` are not supported
-  in v1.
+  in v1. Nice-to-have backlog (user decision 2026-08-08, ADR-024): when implemented,
+  matching order is exact match → `resource:*` → `*:action` → `*:*`; a role holding
+  `*:*` acts as superadmin (no separate bypass option needed); exact-match behavior
+  stays unchanged (backward compatible).
+- **No role metadata.** Roles carry only name, permissions, and parents. Nice-to-have
+  backlog (ADR-024): optional `Metadata map[string]string` on `Role` — descriptive
+  only, no effect on validation, enforcement, SQL schema, or tenant scoping.
+- **No superadmin special-case.** "Superadmin" is modeled as a role holding the `*:*`
+  wildcard permission (backlog design, ADR-024), not as a dedicated option or bypass
+  path in the Enforcer.
 - **No per-field (column-level) authorization.** Authorization is at the resource/action
   level only.
 - **No administration UI** for managing roles or permissions.
@@ -50,6 +59,11 @@
   collection), SQL cycle checks (`checkCycles`), and the memory store's `detectCycle` traverse
   the parent graph recursively. Pathologically deep hierarchies (hundreds of thousands of
   levels) can exhaust the goroutine stack; keep hierarchies shallow and wide instead.
+- **Registration is quadratic on pathological chains.** Each role insert runs a
+  cycle check over its transitive parents, so building a linear chain of N roles
+  costs O(N²) (verified: 10,000-level chains register in ~1s, 100,000 levels do
+  not complete in 3 minutes). Real hierarchies are shallow; a cycle check after
+  every insert is the price of rejecting cycles at registration time.
 - **No auto-reload / hot-swap** of policies from storage without redeploy.
 - **Tenant is fixed per Enforcer.** `WithTenant` is required and cannot be
   changed after construction; an application serving many tenants builds one
@@ -65,6 +79,17 @@
 - Engine and cache are designed to be safe for concurrent reads/writes, but correctness of
   user-provided `Store` implementations is the responsibility of the implementer.
 - Cache hit decision is targeted at under 1 ms; uncached decisions depend on the store.
+- **Per-tenant adapter memory.** Each `TenantRegistry` caches one Enforcer per
+  tenant for the process lifetime (factory runs once per tenant, by design).
+  Every cached Enforcer holds its own LRU (default 1024 snapshots, 5m TTL),
+  so a registry serving N tenants keeps roughly N × cache-budget in memory.
+  With a shared SQL store the per-tenant footprint is small; with per-tenant
+  memory stores it is the whole tenant dataset. Bound tenant IDs (no
+  user-controlled unbounded tenant names) and call `Clear()` to release
+  cached Enforcers when tenants are decommissioned.
+- **Memory store user keys.** The in-memory store retains one (empty) entry
+  per user ID ever assigned, so its footprint grows with the number of
+  distinct user IDs, not with current assignments.
 
 ## 5. Delivery limitations (current repo state)
 

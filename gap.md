@@ -50,4 +50,6 @@ follow-ups:
 - Administration UI.
 - Per-field authorization.
 - An aggregator package that re-exports all adapters.
-- Wildcard permissions (v2).
+- Wildcard permissions (v2) — design agreed (ADR-024): exact → `resource:*` → `*:action`
+  → `*:*`; `*:*` = superadmin role.
+- Role metadata (`Metadata map[string]string`) — ADR-024.

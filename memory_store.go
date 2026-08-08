@@ -91,6 +91,67 @@ func (s *memoryStore) GetRoles(_ context.Context, userID string) ([]string, erro
 	return out, nil
 }
 
+// ListRoles returns a copy of every role in the store.
+func (s *memoryStore) ListRoles(_ context.Context) ([]Role, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Role, 0, len(s.roles))
+	for _, role := range s.roles {
+		cp := Role{Name: role.Name}
+		cp.Permissions = append([]Permission(nil), role.Permissions...)
+		cp.Parents = append([]string(nil), role.Parents...)
+		out = append(out, cp)
+	}
+	return out, nil
+}
+
+// ListRolesByPrefix returns a copy of the roles whose names begin with
+// prefix, so shared stores only copy the caller's roles.
+func (s *memoryStore) ListRolesByPrefix(_ context.Context, prefix string) ([]Role, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Role, 0)
+	for _, role := range s.roles {
+		if !strings.HasPrefix(role.Name, prefix) {
+			continue
+		}
+		cp := Role{Name: role.Name}
+		cp.Permissions = append([]Permission(nil), role.Permissions...)
+		cp.Parents = append([]string(nil), role.Parents...)
+		out = append(out, cp)
+	}
+	return out, nil
+}
+
+// UpdateRole replaces the permissions and parents of an existing role.
+func (s *memoryStore) UpdateRole(_ context.Context, role Role) error {
+	if !validRole(role) {
+		return ErrInvalidRole
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.roles[role.Name]; !exists {
+		return ErrRoleNotFound
+	}
+	for _, parent := range role.Parents {
+		if _, ok := s.roles[parent]; !ok {
+			return ErrParentNotFound
+		}
+	}
+	// Swap in the new parents before the cycle check: detectCycle walks the
+	// stored graph, so it must see the updated links.
+	old := s.roles[role.Name]
+	updated := Role{Name: old.Name}
+	updated.Permissions = append([]Permission(nil), role.Permissions...)
+	updated.Parents = append([]string(nil), role.Parents...)
+	s.roles[role.Name] = updated
+	if err := detectCycle(s.roles, role.Name, map[string]bool{}); err != nil {
+		s.roles[role.Name] = old
+		return err
+	}
+	return nil
+}
+
 func (s *memoryStore) DeleteRole(_ context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

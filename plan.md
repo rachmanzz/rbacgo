@@ -265,6 +265,8 @@ be consistent across instances, so it lives in shared storage:
 
 ## 9. Open follow-ups
 
-- Wildcard permissions (v2).
+- Wildcard permissions (v2) — matching order exact → `resource:*` → `*:action` → `*:*`;
+  `*:*` role doubles as superadmin (ADR-024).
+- Role metadata (`Metadata map[string]string` on `Role`) — ADR-024.
 - ABAC policies (post-v1).
 - Auto-reload of policies from SQL (post-v1).

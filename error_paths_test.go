@@ -290,6 +290,12 @@ func TestSQLStoreClosedDBErrorPaths(t *testing.T) {
 	if err := s.AddRole(ctx, Role{Name: "r"}); err == nil {
 		t.Error("AddRole on closed db: want error")
 	}
+	if _, err := s.ListRoles(ctx); err == nil {
+		t.Error("ListRoles on closed db: want error")
+	}
+	if err := s.UpdateRole(ctx, Role{Name: "r"}); err == nil {
+		t.Error("UpdateRole on closed db: want error")
+	}
 }
 
 func TestSQLStoreDropTableErrorPaths(t *testing.T) {
