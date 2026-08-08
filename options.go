@@ -76,3 +76,19 @@ func WithPolicyVersionStore(vs PolicyVersioner) Option {
 		return nil
 	}
 }
+
+// WithTenant sets the tenant (organization, workspace, app, …) this Enforcer
+// is scoped to. Required: New returns ErrTenantRequired without it. Roles,
+// users, and cache entries are namespaced by the tenant, so one shared store
+// can serve many tenants without cross-tenant access. The tenant owning a
+// role is the tenant of the Enforcer that registered it; assignments are
+// made by that tenant's admin/owner through this Enforcer.
+func WithTenant(tenant string) Option {
+	return func(e *Enforcer) error {
+		if strings.TrimSpace(tenant) == "" {
+			return fmt.Errorf("rbacgo: empty tenant")
+		}
+		e.tenant = strings.TrimSpace(tenant)
+		return nil
+	}
+}

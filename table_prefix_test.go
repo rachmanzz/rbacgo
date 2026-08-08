@@ -25,34 +25,34 @@ func TestTablePrefixIsolation(t *testing.T) {
 		t.Fatalf("NewSQLStore app2_: %v", err)
 	}
 
-	viewer := Role{Name: "viewer", Permissions: []Permission{{Resource: "/a", Action: "GET"}}}
+	viewer := Role{Name: "t1::viewer", Permissions: []Permission{{Resource: "/a", Action: "GET"}}}
 	if err := storeA.AddRole(ctx, viewer); err != nil {
 		t.Fatalf("AddRole A: %v", err)
 	}
 	// Same role name must not collide across prefixes.
-	if err := storeB.AddRole(ctx, viewer); err != nil {
+	if err := storeB.AddRole(ctx, Role{Name: "t2::viewer", Permissions: viewer.Permissions}); err != nil {
 		t.Fatalf("AddRole B same name: %v", err)
 	}
-	if err := storeB.AddRole(ctx, Role{Name: "editor"}); err != nil {
+	if err := storeB.AddRole(ctx, Role{Name: "t2::editor"}); err != nil {
 		t.Fatalf("AddRole B editor: %v", err)
 	}
 
 	// A must not see B's editor; both must see their own viewer.
-	if _, ok, err := storeA.GetRole(ctx, "editor"); err != nil || ok {
+	if _, ok, err := storeA.GetRole(ctx, "t2::editor"); err != nil || ok {
 		t.Fatalf("GetRole A editor: ok=%v err=%v, want not found", ok, err)
 	}
-	if _, ok, err := storeB.GetRole(ctx, "editor"); err != nil || !ok {
+	if _, ok, err := storeB.GetRole(ctx, "t2::editor"); err != nil || !ok {
 		t.Fatalf("GetRole B editor: ok=%v err=%v, want found", ok, err)
 	}
-	if _, ok, err := storeA.GetRole(ctx, "viewer"); err != nil || !ok {
+	if _, ok, err := storeA.GetRole(ctx, "t1::viewer"); err != nil || !ok {
 		t.Fatalf("GetRole A viewer: ok=%v err=%v, want found", ok, err)
 	}
 
 	// Full enforcement works on prefixed tables.
-	if err := storeA.AssignRole(ctx, "u1", "viewer"); err != nil {
+	if err := storeA.AssignRole(ctx, "t1::u1", "t1::viewer"); err != nil {
 		t.Fatalf("AssignRole A: %v", err)
 	}
-	enforcer, err := New(WithStore(storeA))
+	enforcer, err := New(WithTenant("t1"), WithStore(storeA))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestEnvSQLTablePrefix(t *testing.T) {
 	t.Setenv("RBAC_CACHE", "none")
 
 	ctx := context.Background()
-	e, err := New(WithConfigFromEnv())
+	e, err := New(WithTenant("env"), WithConfigFromEnv())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

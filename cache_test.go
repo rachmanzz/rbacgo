@@ -86,7 +86,7 @@ func TestEnforcerCacheIntegration(t *testing.T) {
 	if !e.Enforce(ctx, "u1", "x", "read") {
 		t.Fatal("expected allow")
 	}
-	if _, ok := c.Get("user:u1"); !ok {
+	if _, ok := c.Get("t::user:u1"); !ok {
 		t.Fatal("expected cached permission set for u1")
 	}
 
@@ -94,7 +94,7 @@ func TestEnforcerCacheIntegration(t *testing.T) {
 	if err := e.RegisterRole(ctx, Role{Name: "other"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := c.Get("user:u1"); ok {
+	if _, ok := c.Get("t::user:u1"); ok {
 		t.Fatal("cache should be flushed after role registration")
 	}
 
@@ -105,7 +105,7 @@ func TestEnforcerCacheIntegration(t *testing.T) {
 	if err := e.AssignRole(ctx, "u1", "other"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := c.Get("user:u1"); ok {
+	if _, ok := c.Get("t::user:u1"); ok {
 		t.Fatal("cache entry should be dropped after role assignment")
 	}
 }
@@ -144,14 +144,14 @@ func TestNewDefaultCache(t *testing.T) {
 	if !e.Enforce(ctx, "u1", "x", "read") {
 		t.Fatal("expected allow")
 	}
-	if _, ok := e.cache.Get("user:u1"); !ok {
+	if _, ok := e.cache.Get("t::user:u1"); !ok {
 		t.Fatal("expected default cache to hold u1's permission set")
 	}
 	// Mutations must still invalidate the default cache.
 	if err := e.RegisterRole(ctx, Role{Name: "other"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := e.cache.Get("user:u1"); ok {
+	if _, ok := e.cache.Get("t::user:u1"); ok {
 		t.Fatal("default cache should be flushed after role registration")
 	}
 }
@@ -160,7 +160,7 @@ func TestEnvConfigRedisCacheConstruction(t *testing.T) {
 	t.Setenv("RBAC_STORE", "memory")
 	t.Setenv("RBAC_CACHE", "redis")
 	t.Setenv("RBAC_REDIS_ADDR", "127.0.0.1:1")
-	if _, err := New(WithConfigFromEnv()); err != nil {
+	if _, err := New(WithTenant("t"), WithConfigFromEnv()); err != nil {
 		// Construction must not fail even if Redis is unreachable; lookups
 		// degrade to misses.
 		t.Fatalf("New: %v", err)

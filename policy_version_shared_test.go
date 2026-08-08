@@ -31,7 +31,7 @@ func TestSQLStorePolicyVersionDefault(t *testing.T) {
 		t.Fatalf("initial PolicyVersion = %d, %v; want 0", v, err)
 	}
 
-	e, err := New(WithStore(s))
+	e, err := New(WithTenant("t"), WithStore(s))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestPolicyVersionSharedAcrossSQLiteInstances(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSQLStore: %v", err)
 		}
-		e, err := New(WithStore(s))
+		e, err := New(WithTenant("t"), WithStore(s))
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -123,11 +123,11 @@ func TestPolicyVersionSharedViaRedis(t *testing.T) {
 
 	// Two enforcer instances backed by separate memory stores but the SAME
 	// Redis version key: they agree on one version.
-	e1, err := New(WithMemoryStore(), WithPolicyVersionStore(NewRedisPolicyVersion(client, "rbac:policy_version")))
+	e1, err := New(WithTenant("t"), WithMemoryStore(), WithPolicyVersionStore(NewRedisPolicyVersion(client, "rbac:policy_version")))
 	if err != nil {
 		t.Fatalf("New e1: %v", err)
 	}
-	e2, err := New(WithMemoryStore(), WithPolicyVersionStore(NewRedisPolicyVersion(client, "rbac:policy_version")))
+	e2, err := New(WithTenant("t"), WithMemoryStore(), WithPolicyVersionStore(NewRedisPolicyVersion(client, "rbac:policy_version")))
 	if err != nil {
 		t.Fatalf("New e2: %v", err)
 	}
@@ -225,6 +225,7 @@ func TestSharedPolicyVersionConcurrent(t *testing.T) {
 
 	mk := func() (*Enforcer, error) {
 		return New(
+			WithTenant("t"),
 			WithMemoryStore(),
 			WithPolicyVersionStore(NewRedisPolicyVersion(client, "rbac:policy_version")),
 		)
@@ -306,7 +307,7 @@ func (errPolicyVersion) NextPolicyVersion(context.Context) (uint64, error) { ret
 
 func TestPolicyVersionSourceErrorFallback(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore(), WithPolicyVersionStore(errPolicyVersion{}))
+	e, err := New(WithTenant("t"), WithMemoryStore(), WithPolicyVersionStore(errPolicyVersion{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

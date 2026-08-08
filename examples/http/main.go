@@ -41,7 +41,9 @@ func seed(enforcer *rbacgo.Enforcer) {
 }
 
 func main() {
-	enforcer, err := rbacgo.New()
+	enforcer, err := rbacgo.New(
+		rbacgo.WithTenant("demo"),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

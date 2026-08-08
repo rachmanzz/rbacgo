@@ -32,7 +32,7 @@ func TestConfigFromEnvCustomPrefix(t *testing.T) {
 
 func TestConfigFromEnvUnknownStore(t *testing.T) {
 	t.Setenv("RBAC_STORE", "bogus")
-	if _, err := New(WithConfigFromEnv()); err == nil {
+	if _, err := New(WithTenant("t"), WithConfigFromEnv()); err == nil {
 		t.Fatal("expected error for unknown store type")
 	}
 }

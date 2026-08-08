@@ -86,7 +86,7 @@ func TestConfigFromEnvSQLWithURL(t *testing.T) {
 
 func TestConfigFromEnvSQLMissingURL(t *testing.T) {
 	t.Setenv("RBAC_STORE", "sql")
-	if _, err := New(WithConfigFromEnv()); err == nil {
+	if _, err := New(WithTenant("t"), WithConfigFromEnv()); err == nil {
 		t.Fatal("expected error when DATABASE_URL is missing")
 	}
 }
@@ -124,7 +124,7 @@ func TestRegisterRolesStopsOnError(t *testing.T) {
 		t.Fatalf("got %v, want ErrParentNotFound", err)
 	}
 	// First role must have been registered before the failure.
-	if _, ok, _ := e.store.GetRole(ctx, "ok"); !ok {
+	if _, ok, _ := e.store.GetRole(ctx, "t::ok"); !ok {
 		t.Fatal("first role should be registered")
 	}
 }

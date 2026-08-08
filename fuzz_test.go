@@ -175,7 +175,7 @@ func checkAgainstOracle(t *testing.T, e *Enforcer, st *oracleState, g *rand.Rand
 
 func fuzzScenario(data []byte) (*Enforcer, *oracleState) {
 	g := fuzzRNG(data)
-	e, err := New(WithMemoryStore())
+	e, err := New(WithTenant("t"), WithMemoryStore())
 	if err != nil {
 		panic(err)
 	}

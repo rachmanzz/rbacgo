@@ -557,3 +557,43 @@ to take (b) as well.
   the slice filter in `UnassignRole` is still O(roles-per-user).
 - Extra memory: one set entry per (role, user) assignment, plus one map per
   role in use. No API or behavior change; error semantics identical.
+## ADR-021 — required tenant scoping (WithTenant)
+
+- **Date:** 2026-08-06
+- **Status:** Accepted
+- **Reference:** user request (100 organizations), phases P5.27
+
+### Context
+
+User scenario: 100 organizations sharing one RBAC deployment, each with its
+own roles and assignments ("bagaimana saya menentukan siapa yang memiliki
+role itu?"). The engine had no tenant concept: role names and user IDs were
+global, so a shared store clashed cross-organization and ownership was only
+decided by calling convention.
+
+### Decision
+
+- `WithTenant(tenant string)` is **required**: `New` returns
+  `ErrTenantRequired` without it (fail-fast at construction).
+- The tenant ids scope every role, user, assignment, and cache key **inside
+  the library** (`tenant::name` keys; user-facing API stays unscoped).
+  `Store` readers/writers still see the raw names; no store or SQL schema
+  change.
+- Ownership model: a role and its assignments belong to the tenant of the
+  Enforcer that registered/assigned them. The tenant's admin/owner operates
+  through that Enforcer (the existing role-management capability
+  (`"roles","manage"`) gates DeleteRole/UnassignRole inside the tenant).
+- One store can be shared by many tenants (memory store, one SQL store) with
+  full isolation; table prefixes (`WithTablePrefix`) remain available for
+  physical separation per tenant.
+- `TenantID()` exposes the scope. Tenant string is trimmed; blank rejected.
+
+### Consequences
+
+- Breaking change: every existing `New(...)` call site must add
+  `WithTenant(...)`; error is returned, not a runtime surprise.
+- Cross-tenant interference (same role names, same user IDs) is structurally
+  impossible on a shared store; cache keys are scoped so Redis-backed caches
+  cannot leak decisions between tenants.
+- Tenant is fixed per Enforcer instance; apps needing many tenants build one
+  Enforcer per tenant (the documented 100-organization pattern).

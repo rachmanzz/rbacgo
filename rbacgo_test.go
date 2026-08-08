@@ -8,9 +8,14 @@ import (
 
 func testCtx() context.Context { return context.Background() }
 
+// defaultTenant is prepended by mustEnforcer so tests can pass options
+// without repeating WithTenant; an explicit WithTenant in opts wins because
+// options apply in order.
+const defaultTenant = "t"
+
 func mustEnforcer(t *testing.T, opts ...Option) *Enforcer {
 	t.Helper()
-	e, err := New(opts...)
+	e, err := New(append([]Option{WithTenant(defaultTenant)}, opts...)...)
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -21,6 +26,18 @@ func register(t *testing.T, e *Enforcer, roles ...Role) {
 	t.Helper()
 	if err := e.RegisterRoles(testCtx(), roles...); err != nil {
 		t.Fatalf("RegisterRoles(%v) error: %v", roles, err)
+	}
+}
+
+func TestTenantRequired(t *testing.T) {
+	if _, err := New(); !errors.Is(err, ErrTenantRequired) {
+		t.Fatalf("New() without tenant = %v, want ErrTenantRequired", err)
+	}
+	if _, err := New(WithTenant("  ")); err == nil {
+		t.Fatal("New() with blank tenant must fail")
+	}
+	if _, err := New(WithTenant("org-a")); err != nil {
+		t.Fatalf("New() with valid tenant = %v", err)
 	}
 }
 

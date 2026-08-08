@@ -71,10 +71,10 @@ func TestSQLStorePostgres(t *testing.T) {
 	del := store.(RoleDeleter)
 	unassign := store.(RoleUnassigner)
 
-	viewer := Role{Name: "viewer", Permissions: []Permission{{Resource: "/articles", Action: "GET"}}}
+	viewer := Role{Name: "pg::viewer", Permissions: []Permission{{Resource: "/articles", Action: "GET"}}}
 	editor := Role{
-		Name:        "editor",
-		Parents:     []string{"viewer"},
+		Name:        "pg::editor",
+		Parents:     []string{"pg::viewer"},
 		Permissions: []Permission{{Resource: "/articles", Action: "POST"}},
 	}
 	if err := store.AddRole(ctx, viewer); err != nil {
@@ -90,22 +90,22 @@ func TestSQLStorePostgres(t *testing.T) {
 		t.Fatalf("missing parent error = %v, want ErrParentNotFound", err)
 	}
 
-	if err := store.AssignRole(ctx, "pg-user", "editor"); err != nil {
+	if err := store.AssignRole(ctx, "pg::pg-user", "pg::editor"); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
 	if err := store.AssignRole(ctx, "pg-user", "nope"); err != ErrRoleNotFound {
 		t.Fatalf("assign missing role error = %v, want ErrRoleNotFound", err)
 	}
 
-	roles, err := store.GetRoles(ctx, "pg-user")
+	roles, err := store.GetRoles(ctx, "pg::pg-user")
 	if err != nil {
 		t.Fatalf("GetRoles: %v", err)
 	}
-	if len(roles) != 1 || roles[0] != "editor" {
+	if len(roles) != 1 || roles[0] != "pg::editor" {
 		t.Fatalf("roles = %v, want [editor]", roles)
 	}
 
-	role, ok, err := store.GetRole(ctx, "editor")
+	role, ok, err := store.GetRole(ctx, "pg::editor")
 	if err != nil || !ok {
 		t.Fatalf("GetRole editor: ok=%v err=%v", ok, err)
 	}
@@ -114,7 +114,7 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 	hasParent := false
 	for _, p := range role.Parents {
-		if p == "viewer" {
+		if p == "pg::viewer" {
 			hasParent = true
 		}
 	}
@@ -140,7 +140,7 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 
 	// End-to-end enforcement via the Enforcer on top of the SQL store.
-	enforcer, err := New(WithStore(store))
+	enforcer, err := New(WithTenant("pg"), WithStore(store))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -156,27 +156,27 @@ func TestSQLStorePostgres(t *testing.T) {
 
 	// --- Role management flow: UnassignRole / DeleteRole ---
 
-	if err := unassign.UnassignRole(ctx, "pg-user", "editor"); err != nil {
+	if err := unassign.UnassignRole(ctx, "pg::pg-user", "pg::editor"); err != nil {
 		t.Fatalf("UnassignRole: %v", err)
 	}
-	roles, err = store.GetRoles(ctx, "pg-user")
+	roles, err = store.GetRoles(ctx, "pg::pg-user")
 	if err != nil || len(roles) != 0 {
 		t.Fatalf("roles after unassign = %v, %v; want empty", roles, err)
 	}
-	if err := unassign.UnassignRole(ctx, "pg-user", "editor"); err != nil {
+	if err := unassign.UnassignRole(ctx, "pg::pg-user", "pg::editor"); err != nil {
 		t.Fatalf("no-op UnassignRole: %v", err)
 	}
 	if err := unassign.UnassignRole(ctx, "pg-user", "missing"); err != ErrRoleNotFound {
 		t.Fatalf("unassign missing role error = %v, want ErrRoleNotFound", err)
 	}
 
-	if err := del.DeleteRole(ctx, "editor"); err != nil {
+	if err := del.DeleteRole(ctx, "pg::editor"); err != nil {
 		t.Fatalf("DeleteRole editor: %v", err)
 	}
-	if _, ok, err := store.GetRole(ctx, "editor"); err != nil || ok {
+	if _, ok, err := store.GetRole(ctx, "pg::editor"); err != nil || ok {
 		t.Fatalf("GetRole deleted editor: ok=%v err=%v, want not found", ok, err)
 	}
-	if err := del.DeleteRole(ctx, "editor"); err != ErrRoleNotFound {
+	if err := del.DeleteRole(ctx, "pg::editor"); err != ErrRoleNotFound {
 		t.Fatalf("double DeleteRole error = %v, want ErrRoleNotFound", err)
 	}
 
@@ -207,11 +207,11 @@ func TestSQLStorePostgres(t *testing.T) {
 	}
 
 	// Capability-gated management via the enforcer.
-	manager := Role{Name: "pg-manager", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}
+	manager := Role{Name: "pg::pg-manager", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}
 	if err := store.AddRole(ctx, manager); err != nil {
 		t.Fatalf("AddRole pg-manager: %v", err)
 	}
-	if err := store.AssignRole(ctx, "pg-admin", "pg-manager"); err != nil {
+	if err := store.AssignRole(ctx, "pg::pg-admin", "pg::pg-manager"); err != nil {
 		t.Fatalf("AssignRole pg-admin: %v", err)
 	}
 	if err := enforcer.DeleteRole(ctx, "pg-admin", "viewer"); err != nil {
@@ -235,16 +235,18 @@ func TestSQLStorePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLStore prefixed: %v", err)
 	}
-	if err := pref.AddRole(ctx, Role{Name: "viewer", Permissions: []Permission{{Resource: "/p", Action: "GET"}}}); err != nil {
+	// Same visible role name as the deleted main-table editor: must not leak
+	// between table prefixes.
+	if err := pref.AddRole(ctx, Role{Name: "pg::editor", Permissions: []Permission{{Resource: "/p", Action: "GET"}}}); err != nil {
 		t.Fatalf("AddRole prefixed: %v", err)
 	}
-	if _, ok, err := store.GetRole(ctx, "viewer"); err != nil || ok {
+	if _, ok, err := store.GetRole(ctx, "pg::editor"); err != nil || ok {
 		t.Fatalf("unprefixed store sees prefixed role: ok=%v err=%v", ok, err)
 	}
-	if err := pref.AssignRole(ctx, "pg2-user", "viewer"); err != nil {
+	if err := pref.AssignRole(ctx, "pg::pg2-user", "pg::editor"); err != nil {
 		t.Fatalf("AssignRole prefixed: %v", err)
 	}
-	prefEnforcer, err := New(WithStore(pref))
+	prefEnforcer, err := New(WithTenant("pg"), WithStore(pref))
 	if err != nil {
 		t.Fatalf("New prefixed: %v", err)
 	}

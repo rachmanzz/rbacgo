@@ -112,7 +112,7 @@ func TestEnvCacheRedisEndToEnd(t *testing.T) {
 		t.Fatal("expected allow")
 	}
 	// The cached key must exist in Redis.
-	if _, ok := e.cache.Get("user:u1"); !ok {
+	if _, ok := e.cache.Get("t::user:u1"); !ok {
 		t.Fatal("expected cached user key in redis")
 	}
 }
@@ -135,7 +135,7 @@ func TestEnvCacheNone(t *testing.T) {
 func TestEnvCacheInvalid(t *testing.T) {
 	t.Setenv("RBAC_STORE", "memory")
 	t.Setenv("RBAC_CACHE", "bogus")
-	if _, err := New(WithConfigFromEnv()); err == nil {
+	if _, err := New(WithTenant("t"), WithConfigFromEnv()); err == nil {
 		t.Fatal("expected error for unknown cache type")
 	}
 }

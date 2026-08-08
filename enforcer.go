@@ -3,6 +3,7 @@ package rbacgo
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -18,6 +19,9 @@ type Enforcer struct {
 	store Store
 	env   *envConfig
 	cache CacheBackend
+	// tenant scopes every role, user, and cache entry (see WithTenant).
+	// Required: New returns ErrTenantRequired without it.
+	tenant string
 	// manageRes/manageAct is the capability required for role-management
 	// operations (DeleteRole / UnassignRole). Default: ("roles", "manage").
 	manageRes string
@@ -40,7 +44,9 @@ type Option func(*Enforcer) error
 // entries, 5m TTL) so every decision is an O(1) cache hit on average. Supply
 // WithSQLStore / WithSQLite / WithStore / WithConfigFromEnv to customise
 // persistence and WithLRU to replace the cache backend; WithConfigFromEnv
-// with RBAC_CACHE=none disables the cache entirely.
+// with RBAC_CACHE=none disables the cache entirely. An Enforcer must be
+// scoped to a tenant: WithTenant is required and New returns
+// ErrTenantRequired without it.
 func New(opts ...Option) (*Enforcer, error) {
 	e := &Enforcer{manageRes: "roles", manageAct: "manage"}
 	for _, opt := range opts {
@@ -60,16 +66,52 @@ func New(opts ...Option) (*Enforcer, error) {
 	if e.cache == nil && e.env == nil {
 		e.cache = NewMemoryLRU(1024, 5*time.Minute)
 	}
+	if e.tenant == "" {
+		return nil, ErrTenantRequired
+	}
 	return e, nil
 }
 
 // Store returns the underlying Store.
 func (e *Enforcer) Store() Store { return e.store }
 
+// TenantID returns the tenant this Enforcer is scoped to.
+func (e *Enforcer) TenantID() string { return e.tenant }
+
+// tenantSep separates tenant from role/user names inside the backing store.
+// Never exposed through the API: RegisterRole/AssignRole/Enforce all accept
+// and return unscoped names.
+const tenantSep = "::"
+
+func (e *Enforcer) roleKey(name string) string { return e.tenant + tenantSep + name }
+
+func (e *Enforcer) userKey(userID string) string { return e.tenant + tenantSep + userID }
+
+func (e *Enforcer) scopeRole(role Role) Role {
+	role.Name = e.roleKey(role.Name)
+	for i, p := range role.Parents {
+		role.Parents[i] = e.roleKey(p)
+	}
+	return role
+}
+
+func (e *Enforcer) unscopeRoles(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = strings.TrimPrefix(n, e.tenant+tenantSep)
+	}
+	return out
+}
+
 // RegisterRole registers a single role. Duplicate names and cycles are
-// rejected (ErrRoleExists, ErrParentNotFound, ErrCycleDetected).
+// rejected (ErrRoleExists, ErrParentNotFound, ErrCycleDetected). The role
+// belongs to this Enforcer's tenant: the tenant's admin/owner assigns and
+// manages it through this Enforcer only.
 func (e *Enforcer) RegisterRole(ctx context.Context, role Role) error {
-	if err := e.store.AddRole(ctx, role); err != nil {
+	if !validRole(role) {
+		return ErrInvalidRole
+	}
+	if err := e.store.AddRole(ctx, e.scopeRole(role)); err != nil {
 		return err
 	}
 	e.bumpPolicyVersion(ctx)
@@ -88,9 +130,11 @@ func (e *Enforcer) RegisterRoles(ctx context.Context, roles ...Role) error {
 	return nil
 }
 
-// AssignRole assigns a role to a user.
+// AssignRole assigns a role to a user. Both belong to this Enforcer's
+// tenant; assignment is performed by the tenant's admin/owner through this
+// Enforcer.
 func (e *Enforcer) AssignRole(ctx context.Context, userID, roleName string) error {
-	if err := e.store.AssignRole(ctx, userID, roleName); err != nil {
+	if err := e.store.AssignRole(ctx, e.userKey(userID), e.roleKey(roleName)); err != nil {
 		return err
 	}
 	e.bumpPolicyVersion(ctx)
@@ -111,7 +155,7 @@ func (e *Enforcer) DeleteRole(ctx context.Context, userID, roleName string) erro
 	if !ok {
 		return ErrUnsupported
 	}
-	if err := d.DeleteRole(ctx, roleName); err != nil {
+	if err := d.DeleteRole(ctx, e.roleKey(roleName)); err != nil {
 		return err
 	}
 	e.bumpPolicyVersion(ctx)
@@ -131,7 +175,7 @@ func (e *Enforcer) UnassignRole(ctx context.Context, userID, targetUserID, roleN
 	if !ok {
 		return ErrUnsupported
 	}
-	if err := u.UnassignRole(ctx, targetUserID, roleName); err != nil {
+	if err := u.UnassignRole(ctx, e.userKey(targetUserID), e.roleKey(roleName)); err != nil {
 		return err
 	}
 	e.bumpPolicyVersion(ctx)
@@ -213,10 +257,11 @@ func (e *Enforcer) EnforceCtx(ctx context.Context, userID, resource, action stri
 // permission set (own + inherited, deduplicated, alphabetically sorted).
 // Permissions reflect the cache when one is enabled.
 func (e *Enforcer) PermissionView(ctx context.Context, userID string) (PermissionView, error) {
-	roles, err := e.store.GetRoles(ctx, userID)
+	roles, err := e.store.GetRoles(ctx, e.userKey(userID))
 	if err != nil {
 		return PermissionView{}, err
 	}
+	roles = e.unscopeRoles(roles)
 	ps, err := e.permissionsFor(ctx, userID)
 	if err != nil {
 		return PermissionView{}, err
@@ -247,7 +292,7 @@ func (e *Enforcer) PermissionView(ctx context.Context, userID string) (Permissio
 
 // HasRole reports whether userID holds the given role (including inheritance).
 func (e *Enforcer) HasRole(ctx context.Context, userID, roleName string) (bool, error) {
-	roles, err := e.store.GetRoles(ctx, userID)
+	roles, err := e.store.GetRoles(ctx, e.userKey(userID))
 	if err != nil {
 		return false, err
 	}
@@ -257,21 +302,21 @@ func (e *Enforcer) HasRole(ctx context.Context, userID, roleName string) (bool, 
 			return false, err
 		}
 	}
-	return seen[roleName], nil
+	return seen[e.roleKey(roleName)], nil
 }
 
 // permissionsFor returns the effective permission set for a user, consulting
 // the cache when enabled.
 func (e *Enforcer) permissionsFor(ctx context.Context, userID string) (permissionSet, error) {
 	if e.cache != nil {
-		if v, ok := e.cache.Get("user:" + userID); ok {
+		if v, ok := e.cache.Get(e.userKey("user:" + userID)); ok {
 			if ps, ok := v.(permissionSet); ok {
 				return ps, nil
 			}
 		}
 	}
 	ps := make(permissionSet)
-	roles, err := e.store.GetRoles(ctx, userID)
+	roles, err := e.store.GetRoles(ctx, e.userKey(userID))
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +326,7 @@ func (e *Enforcer) permissionsFor(ctx context.Context, userID string) (permissio
 		}
 	}
 	if e.cache != nil {
-		e.cache.Set("user:"+userID, ps)
+		e.cache.Set(e.userKey("user:"+userID), ps)
 	}
 	return ps, nil
 }
@@ -294,7 +339,7 @@ func (e *Enforcer) flushCache() {
 
 func (e *Enforcer) dropCache(userID string) {
 	if e.cache != nil {
-		e.cache.Delete("user:" + userID)
+		e.cache.Delete(e.userKey("user:" + userID))
 	}
 }
 

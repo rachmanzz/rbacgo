@@ -18,10 +18,10 @@ func (roleMgmtStubStore) GetRole(context.Context, string) (Role, bool, error) {
 	return Role{Name: "manager", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}, true, nil
 }
 func (roleMgmtStubStore) GetRoles(_ context.Context, userID string) ([]string, error) {
-	if userID == "broken" {
+	if userID == "t::broken" {
 		return nil, errTest
 	}
-	if userID == "admin" {
+	if userID == "t::admin" {
 		return []string{"manager"}, nil
 	}
 	return nil, nil
@@ -29,7 +29,7 @@ func (roleMgmtStubStore) GetRoles(_ context.Context, userID string) ([]string, e
 
 func TestDeleteRolePermissionDenied(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithStore(roleMgmtStubStore{}))
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestDeleteRolePermissionDenied(t *testing.T) {
 
 func TestDeleteRoleUnsupportedStore(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithStore(roleMgmtStubStore{}))
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestDeleteRoleUnsupportedStore(t *testing.T) {
 
 func TestDeleteRoleEnforceError(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithStore(roleMgmtStubStore{}))
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestDeleteRoleEnforceError(t *testing.T) {
 
 func TestUnassignRolePermissionDenied(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithStore(roleMgmtStubStore{}))
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestUnassignRolePermissionDenied(t *testing.T) {
 
 func TestUnassignRoleUnsupportedStore(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithStore(roleMgmtStubStore{}))
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -84,12 +84,19 @@ func TestUnassignRoleUnsupportedStore(t *testing.T) {
 
 func TestUnassignRoleEnforceError(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithStore(roleMgmtStubStore{}))
+	e, err := New(WithTenant("t"), WithStore(roleMgmtStubStore{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	if err := e.UnassignRole(ctx, "broken", "someone", "viewer"); !errors.Is(err, errTest) {
 		t.Fatalf("UnassignRole = %v, want capability-check error", err)
+	}
+}
+
+func TestMemoryStoreAddRoleInvalid(t *testing.T) {
+	s := NewMemoryStore().(*memoryStore)
+	if err := s.AddRole(testCtx(), Role{}); !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("AddRole = %v, want ErrInvalidRole", err)
 	}
 }
 
@@ -328,7 +335,7 @@ func TestSQLStoreUnassignRoleMockPaths(t *testing.T) {
 
 func TestEnforcerRoleManagementFlow(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore(), WithLRU(NewMemoryLRU(16, time.Hour)))
+	e, err := New(WithTenant("t"), WithMemoryStore(), WithLRU(NewMemoryLRU(16, time.Hour)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -409,6 +416,7 @@ func TestEnforcerRoleManagementFlow(t *testing.T) {
 func TestCustomRoleManagementPermission(t *testing.T) {
 	ctx := context.Background()
 	e, err := New(
+		WithTenant("t"),
 		WithMemoryStore(),
 		WithRoleManagementPermission("acl", "manage"),
 	)

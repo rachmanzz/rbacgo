@@ -13,7 +13,7 @@ import (
 func setup(t *testing.T) *rbacgo.Enforcer {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	e, err := rbacgo.New(rbacgo.WithMemoryStore())
+	e, err := rbacgo.New(rbacgo.WithTenant("test"), rbacgo.WithMemoryStore())
 	if err != nil {
 		t.Fatal(err)
 	}

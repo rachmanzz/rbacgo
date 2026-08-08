@@ -401,7 +401,8 @@ must be provided explicitly.
 - [x] Docs: README middleware section + validation checklist (no default,
       required option).
 - [x] Verified: all 4 adapter suites + examples build clean.
-- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+- [x] Commit + push — done: `24303b4` pushed to `main` + tags `v0.1.3-1`,
+      `http/gin/fiber/echo/v0.1.3-1` (2026-08-06, on explicit request).
 
 ### default LRU cache in New() (P5.25, 2026-08-06)
 
@@ -419,7 +420,8 @@ hit on average instead of rebuilding the effective permission set per call.
       new ADR-019.
 - [x] Verified: `go test -race`, `go vet`, coverage stays 100.0%; no behavior
       change to any existing decision (cache is flushed on every mutation).
-- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+- [x] Commit + push — included in `24303b4` + tags `v0.1.3-1` (2026-08-06, on
+      explicit request).
 
 ### memoryStore role index (P5.26, 2026-08-06)
 
@@ -436,7 +438,12 @@ memory store so mutations no longer scan.
       vs uncached miss 549 ns/op (~3.9x), 8 B vs 560 B per decision.
 - [x] Verified: `go test -race`, `go vet`, coverage 100.0%; no API or behavior
       change (order preserved, error semantics identical).
-- [ ] Commit + push — **only on explicit user request** (AGENTS.md).
+- [x] Commit + push — included in `24303b4` + tags `v0.1.3-1` (2026-08-06, on
+      explicit request).
+- [x] Release verification before tagging: full PG17.9 integration suite
+      (`-tags integration` against live `127.0.0.1:5432`, dsn via
+      `RBAC_TEST_POSTGRES_DSN`) and live Redis 7 sanity run (Redis LRU +
+      policy version + env `RBAC_CACHE=redis` path) — both green.
 - [x] All F1–F9 items closed or explicitly accepted (F7, F8 = accepted as INFO).
 - [x] Round-2 findings closed: R1 (sqlite `:memory:` concurrency fix + regression test),
       R2 (README cache claim), R3 (dependabot.yml), R4 (env-path `:memory:` concurrency fix),
@@ -469,3 +476,26 @@ memory store so mutations no longer scan.
 - Update `decision-log.md` whenever a new decision is made.
 - Update `gap.md` to reflect completed/remaining items after each phase.
 - Re-check `limitation.md` for anything that changes scope.
+### tenant scoping required (P5.27, 2026-08-06)
+
+User decision: "WithTenant wajib — terserah apa pun tenantnya (org atau
+lainnya), yang pasti di-assign oleh owner/admin org tersebut." Implemented.
+
+- [x] `WithTenant` option; `New` returns `ErrTenantRequired` without it
+      (blank/whitespace rejected). `TenantID()` getter.
+- [x] All role/user/assignment/cache keys namespaced internally
+      (`tenant::name`); store interface and SQL schema unchanged; API names
+      unscoped on return (PermissionView/HasRole).
+- [x] `RegisterRole` validates the role before scoping (invalid-role error
+      preserved); tenant isolation enforced by the library, not convention.
+- [x] New `tenant_test.go`: isolation across shared memory + shared SQL
+      stores, same names on both tenants, cross-tenant deny, unassign/delete
+      isolation, unscoped PermissionView output.
+- [x] Adapters/examples updated to pass a tenant; adapter go.mods get a local
+      `replace` (matching examples) so tests run against the working tree.
+- [x] Docs: README Quick start + Tenants section + validation checklist,
+      ADR-021.
+- [x] Verified: `go test -race`, `go vet`, coverage 100.0%; PG17.9 live
+      integration and Redis 7 live tenant sanity run — all green.
+- [x] Commit + push — **only on explicit user request** (AGENTS.md); pending
+      user command.

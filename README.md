@@ -50,7 +50,10 @@ Each adapter is its own Go module with independent versioning
 
 ## Quick start
 
-Zero-config: `rbacgo.New()` uses an embedded SQLite store in memory.
+Zero-config: `rbacgo.New()` uses an embedded SQLite store in memory. Every
+enforcer is scoped to a **tenant** (organization, workspace, app…) with
+`WithTenant`; roles, users, and cache entries are namespaced by it, so one
+shared store can serve many tenants without cross-tenant access.
 
 ```go
 package main
@@ -65,7 +68,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	enforcer, err := rbacgo.New()
+	enforcer, err := rbacgo.New(rbacgo.WithTenant("acme"))
 	if err != nil {
 		panic(err)
 	}
@@ -87,6 +90,32 @@ func main() {
 	fmt.Println(enforcer.Enforce(ctx, "user-123", "articles", "delete")) // false
 }
 ```
+
+## Tenants
+
+An Enforcer is scoped to exactly one tenant, and `WithTenant` is **required**
+— `New` returns `ErrTenantRequired` without it. The tenant id can be anything
+your application uses to identify an organization, workspace, or project.
+
+- Roles, users, assignments, and cache keys are namespaced by the tenant
+  inside the backing store; names API stays clean (`"viewer"`, not
+  `"acme:viewer"`).
+- One store can serve many tenants — `Store()` instances are shared by
+  constructing multiple enforcers with the same store:
+  ```go
+  store := rbacgo.NewMemoryStore() // or one SQL store / DB per deployment
+  acme, _ := rbacgo.New(rbacgo.WithTenant("acme"), rbacgo.WithStore(store))
+  globex, _ := rbacgo.New(rbacgo.WithTenant("globex"), rbacgo.WithStore(store))
+  acme.RegisterRole(ctx, rbacgo.Role{Name: "viewer", ...})
+  globex.RegisterRole(ctx, rbacgo.Role{Name: "viewer", ...}) // same name, no clash
+  ```
+* Roles and assignments belong to the tenant's admin/owner: tenant A can
+  never read, assign, unassign, or delete tenant B's roles even on a shared
+  store — isolation is enforced by the library, not by calling convention.
+* `TenantID()` returns the tenant of an enforcer.
+* For 100+ isolated organizations prefer **one Enforcer per tenant** (memory
+  store or SQLite file each), or a shared SQL database with a table prefix
+  per tenant for stricter physical separation.
 
 ## Role hierarchy & cycle detection
 
@@ -479,40 +508,46 @@ from its own auth layer).
 > deployment before going to production. Each item links to the relevant code
 > and the environment variables you may need.
 
-1. **User-ID extraction** — `WithUserID` is **required** and has no default
+1. **Tenant** — `WithTenant` is **required** and has no default (see
+   `options.go`): every Enforcer is scoped to one tenant and the API rejects
+   `New` without it (`ErrTenantRequired`). Pass the tenant id your app
+   resolves (organization, workspace, project) and construct one Enforcer per
+   tenant.
+
+2. **User-ID extraction** — `WithUserID` is **required** and has no default
    (see `http/http.go`, `fiber/fiber.go`, `echo/echo.go`, `gin/gin.go`): the
    middleware never reads identity from HTTP headers. Wire it to your own
    authentication (JWT claims, session cookie, upstream proxy, ...).
 
-2. **Resource/action mapping** — defaults to `(URL path, HTTP method)` (see
+3. **Resource/action mapping** — defaults to `(URL path, HTTP method)` (see
    `WithResourceAction` in the same adapter files). Validate that your
    registered permission resources exactly match the paths your routes serve
    (including the leading `/`) and that actions match your methods
    (`GET`, `POST`, ...). A mismatch fails closed (403), but verify it is what
    you intend.
 
-3. **LRU capacity & TTL** — see the attention note in
+4. **LRU capacity & TTL** — see the attention note in
    [Cache layer](#cache-layer). Re-validate `capacity`/`ttl` against your
    expected number of active users so memory does not balloon.
    Env vars: `RBAC_CACHE`, `RBAC_CACHE_CAPACITY`, `RBAC_CACHE_TTL`.
 
-4. **SQL store driver** — when using `RBAC_STORE=sql` (or `WithSQLStore`), make
+5. **SQL store driver** — when using `RBAC_STORE=sql` (or `WithSQLStore`), make
    sure the driver is imported and registered (e.g.
    `_ "github.com/jackc/pgx/v5/stdlib"` for Postgres) and that the database is
    reachable. Env vars: `RBAC_DATABASE_URL`.
 
-5. **SQLite `:memory:` default** — the default store is an embedded in-memory
+6. **SQLite `:memory:` default** — the default store is an embedded in-memory
    SQLite database (see `sqlite.go`): data is process-local and lost on
    restart. Use `WithSQLite(path)` / `RBAC_SQLITE_PATH` for persistence, and a
    shared SQL store (e.g. Postgres) for multi-instance deployments.
    Env var: `RBAC_SQLITE_PATH`.
 
-6. **Role hierarchy** — cycles are rejected at registration (see
+7. **Role hierarchy** — cycles are rejected at registration (see
    `detectCycle` in `memory_store.go` / `checkCycles` in `sqlstore.go`), but
    validate your role graph to avoid unintended over-granting through
    inheritance (decision-log ADR-004).
 
-7. **401 vs 403 semantics** — default responses are JSON
+8. **401 vs 403 semantics** — default responses are JSON
    (`{"error":"unauthorized"}`, `{"error":"forbidden"}`). Validate that your
    client/UI expects them, and override with `WithUnauthorizedHandler` /
    `WithDeniedHandler` per adapter.

@@ -9,7 +9,7 @@ import (
 
 func TestPermissionViewBasic(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore())
+	e, err := New(WithTenant("t"), WithMemoryStore())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestPermissionViewBasic(t *testing.T) {
 
 func TestPermissionViewJSONShape(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore())
+	e, err := New(WithTenant("t"), WithMemoryStore())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestPermissionViewJSONShape(t *testing.T) {
 
 func TestPermissionViewEmptyUser(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore())
+	e, err := New(WithTenant("t"), WithMemoryStore())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestPermissionViewEmptyUser(t *testing.T) {
 
 func TestPermissionViewUsesCache(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore(), WithLRU(NewMemoryLRU(16, 0)))
+	e, err := New(WithTenant("t"), WithMemoryStore(), WithLRU(NewMemoryLRU(16, 0)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestPermissionViewUsesCache(t *testing.T) {
 
 func TestPolicyVersionIncrements(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore())
+	e, err := New(WithTenant("t"), WithMemoryStore())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestPolicyVersionIncrements(t *testing.T) {
 
 func TestPolicyVersionConcurrent(t *testing.T) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore())
+	e, err := New(WithTenant("t"), WithMemoryStore())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestPermissionViewErrors(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("GetRoles error", func(t *testing.T) {
-		e, err := New(WithStore(permissionViewErrStore{rolesErr: true}))
+		e, err := New(WithTenant("t"), WithStore(permissionViewErrStore{rolesErr: true}))
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -227,7 +227,7 @@ func TestPermissionViewErrors(t *testing.T) {
 	})
 
 	t.Run("GetRole error", func(t *testing.T) {
-		e, err := New(WithStore(permissionViewErrStore{roleErr: true}))
+		e, err := New(WithTenant("t"), WithStore(permissionViewErrStore{roleErr: true}))
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}

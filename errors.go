@@ -25,4 +25,8 @@ var (
 	// ErrUnsupported is returned when the underlying store does not implement
 	// the requested operation.
 	ErrUnsupported = errors.New("rbacgo: store does not support this operation")
+	// ErrTenantRequired is returned when an Enforcer is constructed without
+	// WithTenant. Every enforcer must be scoped to a tenant so roles and
+	// assignments are never shared across organizations.
+	ErrTenantRequired = errors.New("rbacgo: tenant required (use WithTenant)")
 )

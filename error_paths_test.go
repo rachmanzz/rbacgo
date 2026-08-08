@@ -69,13 +69,13 @@ func TestEnforcerCollectErrors(t *testing.T) {
 
 	t.Run("GetRole error during Enforce", func(t *testing.T) {
 		ms := NewMemoryStore()
-		if err := ms.AddRole(ctx, Role{Name: "a"}); err != nil {
+		if err := ms.AddRole(ctx, Role{Name: "t::a"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := ms.AssignRole(ctx, "u1", "a"); err != nil {
+		if err := ms.AssignRole(ctx, "t::u1", "t::a"); err != nil {
 			t.Fatal(err)
 		}
-		e := mustEnforcer(t, WithStore(failGetRoleStore{Store: ms, fail: map[string]bool{"a": true}}))
+		e := mustEnforcer(t, WithStore(failGetRoleStore{Store: ms, fail: map[string]bool{"t::a": true}}))
 		if _, err := e.EnforceCtx(ctx, "u1", "r", "a"); !errors.Is(err, errTest) {
 			t.Fatalf("EnforceCtx = %v, want store error", err)
 		}
@@ -86,16 +86,16 @@ func TestEnforcerCollectErrors(t *testing.T) {
 
 	t.Run("GetRole error on inherited parent", func(t *testing.T) {
 		ms := NewMemoryStore()
-		if err := ms.AddRole(ctx, Role{Name: "b"}); err != nil {
+		if err := ms.AddRole(ctx, Role{Name: "t::b"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := ms.AddRole(ctx, Role{Name: "a", Parents: []string{"b"}}); err != nil {
+		if err := ms.AddRole(ctx, Role{Name: "t::a", Parents: []string{"t::b"}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := ms.AssignRole(ctx, "u1", "a"); err != nil {
+		if err := ms.AssignRole(ctx, "t::u1", "t::a"); err != nil {
 			t.Fatal(err)
 		}
-		e := mustEnforcer(t, WithStore(failGetRoleStore{Store: ms, fail: map[string]bool{"b": true}}))
+		e := mustEnforcer(t, WithStore(failGetRoleStore{Store: ms, fail: map[string]bool{"t::b": true}}))
 		if _, err := e.EnforceCtx(ctx, "u1", "r", "a"); !errors.Is(err, errTest) {
 			t.Fatalf("EnforceCtx = %v, want store error on parent lookup", err)
 		}
@@ -103,16 +103,16 @@ func TestEnforcerCollectErrors(t *testing.T) {
 
 	t.Run("HasRole recursion error on parent", func(t *testing.T) {
 		ms := NewMemoryStore()
-		if err := ms.AddRole(ctx, Role{Name: "b"}); err != nil {
+		if err := ms.AddRole(ctx, Role{Name: "t::b"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := ms.AddRole(ctx, Role{Name: "a", Parents: []string{"b"}}); err != nil {
+		if err := ms.AddRole(ctx, Role{Name: "t::a", Parents: []string{"t::b"}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := ms.AssignRole(ctx, "u1", "a"); err != nil {
+		if err := ms.AssignRole(ctx, "t::u1", "t::a"); err != nil {
 			t.Fatal(err)
 		}
-		e := mustEnforcer(t, WithStore(failGetRoleStore{Store: ms, fail: map[string]bool{"b": true}}))
+		e := mustEnforcer(t, WithStore(failGetRoleStore{Store: ms, fail: map[string]bool{"t::b": true}}))
 		if _, err := e.HasRole(ctx, "u1", "b"); !errors.Is(err, errTest) {
 			t.Fatalf("HasRole = %v, want store error on parent lookup", err)
 		}
@@ -123,9 +123,9 @@ func TestEnforceInjectedCycleDenies(t *testing.T) {
 	ctx := context.Background()
 	e := mustEnforcer(t, WithMemoryStore())
 	ms := e.store.(*memoryStore)
-	ms.roles["a"] = Role{Name: "a", Parents: []string{"b"}}
-	ms.roles["b"] = Role{Name: "b", Parents: []string{"a"}}
-	ms.users["u1"] = []string{"a"}
+	ms.roles["t::a"] = Role{Name: "t::a", Parents: []string{"t::b"}}
+	ms.roles["t::b"] = Role{Name: "t::b", Parents: []string{"t::a"}}
+	ms.users["t::u1"] = []string{"t::a"}
 
 	if _, err := e.EnforceCtx(ctx, "u1", "r", "a"); !errors.Is(err, ErrCycleDetected) {
 		t.Fatalf("EnforceCtx = %v, want ErrCycleDetected", err)
@@ -139,8 +139,8 @@ func TestEnforceMissingParentTolerated(t *testing.T) {
 	ctx := context.Background()
 	e := mustEnforcer(t, WithMemoryStore())
 	ms := e.store.(*memoryStore)
-	ms.roles["a"] = Role{Name: "a", Parents: []string{"ghost"}}
-	ms.users["u1"] = []string{"a"}
+	ms.roles["t::a"] = Role{Name: "t::a", Parents: []string{"t::ghost"}}
+	ms.users["t::u1"] = []string{"t::a"}
 
 	ok, err := e.EnforceCtx(ctx, "u1", "r", "a")
 	if err != nil {
@@ -156,24 +156,24 @@ func TestCollectRoleNamesDiamondAndMissing(t *testing.T) {
 	e := mustEnforcer(t, WithMemoryStore())
 	register(t, e,
 		Role{Name: "viewer"},
-		Role{Name: "a", Parents: []string{"viewer"}},
-		Role{Name: "b", Parents: []string{"viewer"}},
-		Role{Name: "top", Parents: []string{"a", "b"}},
+		Role{Name: "t::a", Parents: []string{"viewer"}},
+		Role{Name: "t::b", Parents: []string{"viewer"}},
+		Role{Name: "top", Parents: []string{"t::a", "t::b"}},
 	)
-	if err := e.AssignRole(ctx, "u1", "top"); err != nil {
+	if err := e.AssignRole(ctx, "t::u1", "top"); err != nil {
 		t.Fatal(err)
 	}
 	// Diamond inheritance revisits "viewer" through both branches.
-	has, err := e.HasRole(ctx, "u1", "viewer")
+	has, err := e.HasRole(ctx, "t::u1", "viewer")
 	if err != nil || !has {
 		t.Errorf("HasRole(viewer) = %v, %v; want true, nil", has, err)
 	}
 
 	// A role whose parent no longer exists is tolerated (defensive).
 	ms := e.store.(*memoryStore)
-	ms.roles["orphan"] = Role{Name: "orphan", Parents: []string{"ghost"}}
-	ms.users["u2"] = []string{"orphan"}
-	has, err = e.HasRole(ctx, "u2", "ghost")
+	ms.roles["t::orphan"] = Role{Name: "t::orphan", Parents: []string{"t::ghost"}}
+	ms.users["t::u2"] = []string{"t::orphan"}
+	has, err = e.HasRole(ctx, "u2", "t::ghost")
 	if err != nil || has {
 		t.Errorf("HasRole(ghost) = %v, %v; want false, nil", has, err)
 	}
@@ -497,9 +497,9 @@ func TestMemoryStoreAddRoleCycleRollback(t *testing.T) {
 	ms := NewMemoryStore().(*memoryStore)
 	// Pre-existing cycle injected directly into the graph; adding a child
 	// pointing at it must be rejected and rolled back.
-	ms.roles["a"] = Role{Name: "a", Parents: []string{"b"}}
-	ms.roles["b"] = Role{Name: "b", Parents: []string{"a"}}
-	if err := ms.AddRole(ctx, Role{Name: "c", Parents: []string{"a"}}); !errors.Is(err, ErrCycleDetected) {
+	ms.roles["t::a"] = Role{Name: "t::a", Parents: []string{"t::b"}}
+	ms.roles["t::b"] = Role{Name: "t::b", Parents: []string{"t::a"}}
+	if err := ms.AddRole(ctx, Role{Name: "c", Parents: []string{"t::a"}}); !errors.Is(err, ErrCycleDetected) {
 		t.Fatalf("AddRole = %v, want ErrCycleDetected", err)
 	}
 	if _, ok := ms.roles["c"]; ok {

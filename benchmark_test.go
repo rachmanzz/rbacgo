@@ -27,7 +27,7 @@ func BenchmarkCacheHit(b *testing.B) {
 // LRU cache — the configuration a plain New() produces.
 func BenchmarkDefaultCacheHit(b *testing.B) {
 	ctx := context.Background()
-	e, err := New(WithMemoryStore())
+	e, err := New(WithTenant("bench"), WithMemoryStore())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func BenchmarkNoCacheMiss(b *testing.B) {
 	ctx := context.Background()
 	b.Setenv("RBAC_STORE", "memory")
 	b.Setenv("RBAC_CACHE", "none")
-	e, err := New(WithConfigFromEnv())
+	e, err := New(WithTenant("bench"), WithConfigFromEnv())
 	if err != nil {
 		b.Fatal(err)
 	}
