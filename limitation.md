@@ -51,6 +51,14 @@
   the parent graph recursively. Pathologically deep hierarchies (hundreds of thousands of
   levels) can exhaust the goroutine stack; keep hierarchies shallow and wide instead.
 - **No auto-reload / hot-swap** of policies from storage without redeploy.
+- **Tenant is fixed per Enforcer.** `WithTenant` is required and cannot be
+  changed after construction; an application serving many tenants builds one
+  Enforcer per tenant (the documented pattern). Tenant-ID uniqueness across
+  enforcers is the application's responsibility — the library guarantees
+  role-name and assignment isolation per tenant, not that two enforcers never
+  use the same tenant id (same tenant id is intentional for multi-instance
+  scaling). Role/user names containing the internal separator `::` are
+  namespaced by the tenant prefix, so they remain unambiguous per tenant.
 
 ## 4. Concurrency & performance notes
 
