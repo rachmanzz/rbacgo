@@ -8,7 +8,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/gofiber/fiber/v3 v3.4.0
 	github.com/labstack/echo/v5 v5.3.1
-	github.com/rachmanzz/rbacgo v0.1.0-1
+	github.com/rachmanzz/rbacgo v0.2.0-4
 	github.com/rachmanzz/rbacgo/echo v0.1.0-1
 	github.com/rachmanzz/rbacgo/fiber v0.1.0-1
 	github.com/rachmanzz/rbacgo/gin v0.1.0-1
