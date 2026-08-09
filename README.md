@@ -218,7 +218,10 @@ Rules:
 3. **Deleting a parent cascades** — child roles automatically lose the deleted
    role from their parent list; their own permissions and assignments remain.
 4. **Cache invalidation** — successful mutations flush the whole lookup cache;
-   unassignments drop the target user's cache entry immediately.
+   unassignments drop the target user's cache entry immediately. With
+   `WithCacheInvalidator`, the same events are published so **every** process
+   sharing the store (and the Redis pub/sub channel) evicts immediately,
+   instead of waiting for TTL expiry.
 5. **Store support** — `UpdateRole`/`DeleteRole`/`UnassignRole`/`ListRoles` are
    optional store capabilities (`RoleUpdater`/`RoleDeleter`/`RoleUnassigner`/
    `RoleLister` interfaces). Stores that do not implement them report
@@ -483,7 +486,29 @@ enforcer, err := rbacgo.New(
 )
 ```
 
-> **Attention — LRU capacity & TTL.** The in-memory LRU implementation
+> **Cross-instance invalidation.** When several application processes (or
+> instances) share one RBAC store, each keeps its own LRU, and a mutation in one
+> process is only seen by the others when their cache entries expire (TTL).
+> Wire them together with `WithCacheInvalidator` and a Redis pub/sub channel so
+> every mutation (role register/update/delete, assignment/unassignment) evicts
+> the affected snapshots in **all** processes immediately:
+>
+> ```go
+> rb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+> invalidator := rbacgo.NewRedisInvalidator(rb, "rbacgo:invalidation")
+> enforcer, err := rbacgo.New(
+> 	rbacgo.WithMemoryStore(),
+> 	rbacgo.WithCacheInvalidator(invalidator),
+> )
+> ```
+>
+> Events are **best-effort**: a publish or delivery failure is logged and
+> skipped, never failing the mutation — coherence degrades back to TTL-bounded
+> instead. The Redis client given to `NewRedisInvalidator` is shared, not
+> closed by the enforcer; only a client created internally via
+> `WithConfigFromEnv` (`RBAC_CACHE=redis`) is owned and closed by `Close()`.
+>
+> > **Attention — LRU capacity & TTL.** The in-memory LRU implementation
 > (`memoryLRU`, see [`cache.go`](cache.go), especially `NewMemoryLRU` and the
 > `Set`/eviction logic) caches one effective permission set per **user**, held
 > in memory until evicted. With many distinct users this can consume a

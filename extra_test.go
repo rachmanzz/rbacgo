@@ -162,6 +162,30 @@ func TestRegisterRoleDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+func TestTenantRejectsSeparator(t *testing.T) {
+	// A tenant id containing the internal "::" separator would share store
+	// keys with another tenant's role named like the suffix (isolation
+	// break), so it is rejected at construction.
+	for _, tenant := range []string{"a::b", " :: ", "x::"} {
+		if _, err := New(WithTenant(tenant), WithStore(NewMemoryStore())); err == nil {
+			t.Fatalf("WithTenant(%q) must be rejected", tenant)
+		}
+	}
+	// Role/user names may still contain "::": within one tenant they are
+	// full suffixes of their scoped keys.
+	ctx := context.Background()
+	e := mustEnforcer(t, WithTenant("a"), WithMemoryStore())
+	if err := e.RegisterRole(ctx, Role{Name: "b::x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AssignRole(ctx, "u::1", "b::x"); err != nil {
+		t.Fatal(err)
+	}
+	if roles, err := e.ListRoles(ctx); err != nil || len(roles) != 1 || roles[0].Name != "b::x" {
+		t.Fatalf("ListRoles = %v, %v; want [b::x]", roles, err)
+	}
+}
+
 func TestPostgresDialectQueries(t *testing.T) {
 	q := buildQueries(dialectPostgres, "")
 	if q.insertRole != "INSERT INTO roles (name) VALUES ($1)" {

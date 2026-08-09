@@ -42,8 +42,14 @@
 - **Env config is read once at construction** (`WithConfigFromEnv`, prefix `RBAC_`). No
   hot-reload — restart required to apply env changes. Explicit options override env vars;
   env vars override defaults.
-- **LRU cache trade-offs.** Cache coherence is bounded by TTL; external changes to storage
-  are not visible until TTL expiry unless explicit invalidation is called.
+- **LRU cache trade-offs.** Within one process, mutations invalidate the cache
+  immediately. Across processes/instances sharing one store, coherence is bounded
+  by TTL — external changes to storage are not visible until TTL expiry unless
+  explicit invalidation is called — **unless** the instances exchange
+  invalidation events over Redis pub/sub (`WithCacheInvalidator`), which makes
+  mutations on any instance evict the affected snapshots on every subscriber
+  immediately (events are best-effort: a network partition or publish failure
+  degrades back to TTL-bounded coherence).
 - **Cache is on by default.** `New()` installs an in-memory LRU (1024 entries, 5m TTL), so
   each enforcer holds up to that many effective-permission snapshots in memory. Use
   `WithConfigFromEnv` + `RBAC_CACHE=none` to disable, or `WithLRU` to swap the backend.
@@ -71,8 +77,11 @@
   enforcers is the application's responsibility — the library guarantees
   role-name and assignment isolation per tenant, not that two enforcers never
   use the same tenant id (same tenant id is intentional for multi-instance
-  scaling). Role/user names containing the internal separator `::` are
-  namespaced by the tenant prefix, so they remain unambiguous per tenant.
+  scaling). **Tenant IDs must not contain the internal separator `::`**
+  (rejected at construction): a tenant like `a::b` would share store keys
+  with tenant `a`'s role `b::x` and break isolation. Role/user names may
+  contain `::` safely: within one tenant they are full suffixes of their
+  scoped keys, so they remain unambiguous per tenant.
 
 ## 4. Concurrency & performance notes
 

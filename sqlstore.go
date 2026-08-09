@@ -49,6 +49,7 @@ type sqlQueries struct {
 	listParentsByPrefix string
 	policyVersion       string
 	nextPolicyVersion   string
+	cycleCheck          string
 }
 
 type dialect int
@@ -207,6 +208,19 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 		nextPolicyVersion: fmt.Sprintf(
 			`INSERT INTO %s (key, value) VALUES ('policy', 1) ON CONFLICT(key) DO UPDATE SET value = %s.value + 1 RETURNING %s.value`,
 			meta, meta, meta),
+		// cycleCheck reports whether roleName is reachable from itself
+		// through parent links, in a single round trip (recursive CTE,
+		// supported by both SQLite >= 3.8.3 and PostgreSQL >= 8.4). UNION
+		// deduplicates rows, so cyclic graphs terminate. The previous
+		// per-node DFS issued one query per ancestor (O(depth) round trips
+		// per mutation); the CTE is O(1) round trips regardless of depth.
+		cycleCheck: fmt.Sprintf(
+			`WITH RECURSIVE reachable(name) AS (`+
+				`SELECT parent_name FROM %s WHERE role_name = %s `+
+				`UNION `+
+				`SELECT rp.parent_name FROM %s rp JOIN reachable r ON rp.role_name = r.name) `+
+				`SELECT COUNT(*) FROM reachable WHERE name = %s`,
+			roleParents, p(1), roleParents, p(2)),
 	}
 }
 
@@ -585,47 +599,28 @@ func (s *sqlStore) NextPolicyVersion(ctx context.Context) (uint64, error) {
 	return v, err
 }
 
-// checkCycles verifies that roleName is not reachable from itself via parents.
+// checkCycles verifies that roleName is not reachable from itself via parents,
+// using a single recursive-CTE query: O(1) round trips regardless of graph
+// depth (the old DFS walked ancestors one query at a time).
 func (s *sqlStore) checkCycles(ctx context.Context, q querrer, roleName string) error {
-	visiting := map[string]bool{}
-	var visit func(name string) error
-	visit = func(name string) error {
-		if visiting[name] {
-			return ErrCycleDetected
-		}
-		visiting[name] = true
-		defer delete(visiting, name)
-
-		rows, err := q.QueryContext(ctx, s.sql.roleParents, name)
-		if err != nil {
-			return err
-		}
-		// Collect parents and close rows before recursing: issuing further
-		// queries on the same transaction while rows are still open fails on
-		// PostgreSQL ("conn busy").
-		var parents []string
-		for rows.Next() {
-			var parent string
-			if err := rows.Scan(&parent); err != nil {
-				rows.Close()
-				return err
-			}
-			parents = append(parents, parent)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-
-		for _, parent := range parents {
-			if err := visit(parent); err != nil {
-				return err
-			}
-		}
-		return nil
+	rows, err := q.QueryContext(ctx, s.sql.cycleCheck, roleName, roleName)
+	if err != nil {
+		return err
 	}
-	return visit(roleName)
+	defer rows.Close()
+	var count int
+	for rows.Next() {
+		if err := rows.Scan(&count); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrCycleDetected
+	}
+	return nil
 }
 
 type querrer interface {

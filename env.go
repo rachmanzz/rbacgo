@@ -120,6 +120,9 @@ func WithConfigFromEnv() Option {
 					Password: password,
 					DB:       dbIdx,
 				})
+				// Track ownership so Enforcer.Close can release it: the
+				// caller never saw this client.
+				e.ownedClient = client
 				e.cache = NewRedisLRU(client, prefix+"cache:", ttl)
 			case "none":
 				// caching disabled

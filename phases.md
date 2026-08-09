@@ -82,6 +82,7 @@
 - [x] In-memory LRU backend.
 - [x] Redis LRU backend.
 - [x] Cache invalidation hooks on role/permission/assignment changes.
+- [x] Cross-instance cache invalidation via Redis pub/sub (`WithCacheInvalidator`, ADR-026).
 - [x] Integration tests: cache hit/miss, TTL expiry, eviction, invalidation.
 - [x] Benchmark: cache hit decision **under 1 ms**.
 

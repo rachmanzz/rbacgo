@@ -196,7 +196,18 @@ func (s *memoryStore) UnassignRole(_ context.Context, userID, roleName string) e
 	if removed {
 		if assigned, ok := s.roleUsers[roleName]; ok {
 			delete(assigned, userID)
+			// Drop the empty index so roleUsers never keeps dead entries.
+			if len(assigned) == 0 {
+				delete(s.roleUsers, roleName)
+			}
 		}
+	}
+	// Drop the user entry entirely when they hold no roles: the map entry
+	// would otherwise pin a backing array that can grow large after many
+	// assignments. GetRoles reports the same empty result either way.
+	if len(filtered) == 0 {
+		delete(s.users, userID)
+		return nil
 	}
 	s.users[userID] = filtered
 	return nil

@@ -784,3 +784,50 @@ of department hr".
   `*:*`) composes with the scopes: a `*:delete:self` pattern would grant
   own-resource deletes on every resource; matching order is extended
   consistently when wildcards land.
+
+## ADR-026 — cross-instance cache invalidation via Redis pub/sub
+
+- **Date:** 2026-08-09
+- **Status:** Accepted
+- **Reference:** audit finding (cross-instance cache staleness bounded only by
+  TTL), user request ("buat potensi perbaikan: implementasi pub/sub
+  invalidation (skala besar)")
+
+### Context
+
+Each enforcer keeps its own LRU. Within one process, mutations flush/drop
+entries immediately, but with several processes sharing one store, a mutation
+in process A was invisible to process B until B's entries expired (5m default
+TTL) — stale authorization decisions at scale. Staleness was documented
+(limitation.md) but never fixable in-process.
+
+### Decision
+
+- **Interface:** `CacheInvalidator` with `Publish(ctx, event)`,
+  `Messages() <-chan InvalidationEvent`, `Close()`. An enforcer constructed
+  with `WithCacheInvalidator(invalidator)` subscribes **synchronously** during
+  `New()` and runs one subscriber goroutine applying events: `InvalidateFlush`
+  clears the whole cache, `InvalidateDrop` deletes exactly the target user's
+  snapshot.
+- **Payload:** JSON on a Redis channel (default `"rbacgo:invalidation"`),
+  with `User` carrying the full tenant-scoped cache key
+  (`tenant::user:<id>`), so any tenant subscriber drops exactly the affected
+  key; unrecognized payloads are skipped.
+- **Publish sites:** every successful mutation (register/update/delete role,
+  assign/unassign) publishes after commit, best-effort — publish errors are
+  logged, never fail the mutation.
+- **Coherence contract:** with subscribers connected, mutations invalidate all
+  instances immediately; on partition or publish failure, coherence degrades
+  back to TTL-bounded (existing behavior) — eventual consistency, never
+  denying valid access beyond store truth.
+- **Ownership:** the Redis client passed to `NewRedisInvalidator` is shared
+  (caller keeps it); only a client created internally by `WithConfigFromEnv`
+  is closed by `Enforcer.Close()`.
+
+### Consequences
+
+- Multi-instance deployments (k8s replicas, lambda, etc.) see mutations
+  immediately with no TTL wait.
+- One extra pub/sub round-trip per mutation (async, best-effort, on the same
+  Redis the app already uses for the cache).
+- Single-instance users unaffected: without the option, behavior is unchanged.

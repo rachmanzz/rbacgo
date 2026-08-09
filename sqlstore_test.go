@@ -348,3 +348,33 @@ func TestSQLiteMemoryDSNVariantSingleConnection(t *testing.T) {
 		})
 	}
 }
+
+// TestSQLStoreDeepChain registers a 500-deep parent chain and closes a cycle
+// at the head. The cycle check is a single recursive-CTE query (O(1) round
+// trips regardless of depth), so the whole chain registers in well under a
+// second; the per-node DFS it replaced would have issued O(depth) queries on
+// every registration.
+func TestSQLStoreDeepChain(t *testing.T) {
+	ctx := context.Background()
+	s := sqliteStore(t, ":memory:")
+	e := mustEnforcer(t, WithTenant("deep"), WithStore(s))
+	const n = 500
+	for i := 0; i < n; i++ {
+		role := Role{Name: fmt.Sprintf("r%d", i)}
+		if i > 0 {
+			role.Parents = []string{fmt.Sprintf("r%d", i-1)}
+		}
+		if err := e.RegisterRole(ctx, role); err != nil {
+			t.Fatalf("register %d: %v", i, err)
+		}
+	}
+	if err := e.RegisterRole(ctx, Role{Name: "admin", Permissions: []Permission{{Resource: "roles", Action: "manage"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AssignRole(ctx, "root", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.UpdateRole(ctx, "root", Role{Name: "r0", Parents: []string{"r499"}}); err != ErrCycleDetected {
+		t.Fatalf("cycle = %v, want ErrCycleDetected", err)
+	}
+}

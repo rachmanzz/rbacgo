@@ -4,8 +4,11 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // permissionSet maps resource -> action -> allowed. It is JSON-serializable so
@@ -33,6 +36,19 @@ type Enforcer struct {
 	// RedisPolicyVersion). Defaults to the store when it implements
 	// PolicyVersioner (SQL meta table).
 	policySource PolicyVersioner
+	// invalidator broadcasts/consumes cache-invalidation events across
+	// enforcer instances (see WithCacheInvalidator).
+	invalidator CacheInvalidator
+	// invalidationMsgs is the event stream the subscriber consumes; it is
+	// attached synchronously in New so no event window exists between
+	// construction and subscription.
+	invalidationMsgs <-chan InvalidationEvent
+	// stopInvalidation closes the subscriber loop (see Close).
+	stopInvalidation chan struct{}
+	closeOnce        sync.Once
+	// ownedClient is the Redis client created by WithConfigFromEnv; Close
+	// releases it. Clients passed by the caller are never closed.
+	ownedClient *redis.Client
 }
 
 // Option configures an Enforcer. Options are applied in order; environment
@@ -69,6 +85,15 @@ func New(opts ...Option) (*Enforcer, error) {
 	if e.tenant == "" {
 		return nil, ErrTenantRequired
 	}
+	if e.invalidator != nil && e.cache != nil {
+		// Subscribe synchronously before New returns: the subscriber must
+		// be attached before the cache becomes usable, otherwise mutations
+		// in the goroutine-startup window would be lost forever (pub/sub
+		// does not replay events).
+		e.invalidationMsgs = e.invalidator.Messages()
+		e.stopInvalidation = make(chan struct{})
+		go e.invalidationLoop()
+	}
 	return e, nil
 }
 
@@ -86,6 +111,11 @@ const tenantSep = "::"
 func (e *Enforcer) roleKey(name string) string { return e.tenant + tenantSep + name }
 
 func (e *Enforcer) userKey(userID string) string { return e.tenant + tenantSep + userID }
+
+// cacheKey is the store key of a user's cached effective-permission
+// snapshot. Invalidation events carry exactly this key, so any subscriber
+// can drop it directly regardless of tenant.
+func (e *Enforcer) cacheKey(userID string) string { return e.userKey("user:" + userID) }
 
 func (e *Enforcer) scopeRole(role Role) Role {
 	role.Name = e.roleKey(role.Name)
@@ -120,6 +150,7 @@ func (e *Enforcer) RegisterRole(ctx context.Context, role Role) error {
 	}
 	e.bumpPolicyVersion(ctx)
 	e.flushCache()
+	e.invalidateAll(ctx)
 	return nil
 }
 
@@ -143,6 +174,7 @@ func (e *Enforcer) AssignRole(ctx context.Context, userID, roleName string) erro
 	}
 	e.bumpPolicyVersion(ctx)
 	e.dropCache(userID)
+	e.invalidateUser(ctx, userID)
 	return nil
 }
 
@@ -164,6 +196,7 @@ func (e *Enforcer) DeleteRole(ctx context.Context, userID, roleName string) erro
 	}
 	e.bumpPolicyVersion(ctx)
 	e.flushCache()
+	e.invalidateAll(ctx)
 	return nil
 }
 
@@ -184,6 +217,7 @@ func (e *Enforcer) UnassignRole(ctx context.Context, userID, targetUserID, roleN
 	}
 	e.bumpPolicyVersion(ctx)
 	e.dropCache(targetUserID)
+	e.invalidateUser(ctx, targetUserID)
 	return nil
 }
 
@@ -208,6 +242,7 @@ func (e *Enforcer) UpdateRole(ctx context.Context, userID string, role Role) err
 	}
 	e.bumpPolicyVersion(ctx)
 	e.flushCache()
+	e.invalidateAll(ctx)
 	return nil
 }
 
@@ -424,7 +459,7 @@ func (e *Enforcer) HasRole(ctx context.Context, userID, roleName string) (bool, 
 // the cache when enabled.
 func (e *Enforcer) permissionsFor(ctx context.Context, userID string) (permissionSet, error) {
 	if e.cache != nil {
-		if v, ok := e.cache.Get(e.userKey("user:" + userID)); ok {
+		if v, ok := e.cache.Get(e.cacheKey(userID)); ok {
 			if ps, ok := v.(permissionSet); ok {
 				return ps, nil
 			}
@@ -441,7 +476,7 @@ func (e *Enforcer) permissionsFor(ctx context.Context, userID string) (permissio
 		}
 	}
 	if e.cache != nil {
-		e.cache.Set(e.userKey("user:"+userID), ps)
+		e.cache.Set(e.cacheKey(userID), ps)
 	}
 	return ps, nil
 }
@@ -454,8 +489,75 @@ func (e *Enforcer) flushCache() {
 
 func (e *Enforcer) dropCache(userID string) {
 	if e.cache != nil {
-		e.cache.Delete(e.userKey("user:" + userID))
+		e.cache.Delete(e.cacheKey(userID))
 	}
+}
+
+// invalidateAll broadcasts a flush event after a role-level mutation. The
+// event is best-effort: a lost event only falls back to TTL expiry.
+func (e *Enforcer) invalidateAll(ctx context.Context) {
+	if e.invalidator == nil {
+		return
+	}
+	_ = e.invalidator.Publish(ctx, InvalidationEvent{Kind: InvalidateFlush})
+}
+
+// invalidateUser broadcasts a drop event after one user's assignments
+// changed. The event carries the exact cache key (tenant-scoped), so any
+// subscriber — in any tenant — drops precisely that user's snapshot; drops
+// for foreign tenants are no-ops on their caches.
+func (e *Enforcer) invalidateUser(ctx context.Context, userID string) {
+	if e.invalidator == nil {
+		return
+	}
+	_ = e.invalidator.Publish(ctx, InvalidationEvent{Kind: InvalidateDrop, User: e.cacheKey(userID)})
+}
+
+// invalidationLoop consumes events from the shared invalidator and applies
+// them to this Enforcer's cache. It exits on Close or when the invalidator
+// shuts down.
+func (e *Enforcer) invalidationLoop() {
+	for {
+		select {
+		case <-e.stopInvalidation:
+			return
+		case ev, ok := <-e.invalidationMsgs:
+			if !ok {
+				return
+			}
+			e.applyInvalidation(ev)
+		}
+	}
+}
+
+func (e *Enforcer) applyInvalidation(ev InvalidationEvent) {
+	// A subscriber loop exists only when a cache does (see New), so the
+	// cache is never nil here.
+	switch ev.Kind {
+	case InvalidateFlush:
+		e.cache.Flush()
+	case InvalidateDrop:
+		if ev.User != "" {
+			e.cache.Delete(ev.User)
+		}
+	}
+}
+
+// Close stops the cross-instance cache-invalidation subscriber and releases
+// the Redis client created by WithConfigFromEnv, if any. Safe to call more
+// than once. After Close the Enforcer remains usable, but its cache no
+// longer receives invalidation events (or, with an env-owned Redis client,
+// serves misses) — decisions stay correct, bounded by TTL like before.
+func (e *Enforcer) Close() error {
+	e.closeOnce.Do(func() {
+		if e.stopInvalidation != nil {
+			close(e.stopInvalidation)
+		}
+		if e.ownedClient != nil {
+			_ = e.ownedClient.Close()
+		}
+	})
+	return nil
 }
 
 // collectEffective unions the effective permission set of role and all its

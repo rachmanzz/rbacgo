@@ -486,13 +486,20 @@ func TestSQLStoreUpdateRoleMockErrorPaths(t *testing.T) {
 func TestSQLStoreCheckCyclesDetectsCycle(t *testing.T) {
 	ctx := context.Background()
 	s := &sqlStore{sql: buildQueries(dialectSQLite, "")}
-	// a -> b -> a forms a cycle: the inner visit of "a" observes it already
-	// being visited, so its parent query is never issued.
+	// The recursive CTE resolves the whole parent graph in one query and
+	// reports the count of ancestors equal to the role itself: count 1 means
+	// "a is reachable from a" (cycle).
 	db := mockDB(
-		mockStep{cols: 1, rows: 1, val: "b"},
-		mockStep{cols: 1, rows: 1, val: "a"},
+		mockStep{cols: 1, rows: 1, val: int64(1)},
 	)
 	if err := s.checkCycles(ctx, db, "a"); !errors.Is(err, ErrCycleDetected) {
 		t.Fatalf("checkCycles = %v, want ErrCycleDetected", err)
+	}
+	// count 0 means acyclic.
+	db = mockDB(
+		mockStep{cols: 1, rows: 1, val: int64(0)},
+	)
+	if err := s.checkCycles(ctx, db, "a"); err != nil {
+		t.Fatalf("checkCycles = %v, want nil", err)
 	}
 }
