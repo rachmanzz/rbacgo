@@ -6,7 +6,7 @@ toolchain go1.25.12
 
 require (
 	github.com/gin-gonic/gin v1.12.0
-	github.com/rachmanzz/rbacgo v0.1.0-1
+	github.com/rachmanzz/rbacgo v0.2.0-4
 )
 
 require (
