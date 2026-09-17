@@ -5,9 +5,9 @@ go 1.25.7
 toolchain go1.25.12
 
 require (
-	github.com/alicebob/miniredis/v2 v2.38.0
-	github.com/jackc/pgx/v5 v5.10.0
-	github.com/mattn/go-sqlite3 v1.14.49
+	github.com/alicebob/miniredis/v2 v2.39.0
+	github.com/jackc/pgx/v5 v5.11.0
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/redis/go-redis/v9 v9.22.0
 )
 
