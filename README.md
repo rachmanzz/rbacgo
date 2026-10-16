@@ -778,7 +778,9 @@ scan. The Go 1.26.0 minimum across all modules was explicitly approved.
 See [.knowledges/audit/feature-audit_v3.md](.knowledges/audit/feature-audit_v3.md)
 for feature-completion evidence and
 [Dependabot remediation](.knowledges/audit/dependabot-fix_v1.md) for the subsequent
-coordinated dependency update and minimum-Go verification. Symbol-level scans
+coordinated dependency update and minimum-Go verification.
+[Audit v5](.knowledges/audit/feature-audit_v5.md) records the presence-rule and
+audit-directory synchronization fixes. Symbol-level scans
 do not prove that every possible
 application integration is safe; rerun them for each deployment and release.
 

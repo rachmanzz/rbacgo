@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -111,6 +113,8 @@ func (e *AuditWriteError) Unwrap() error { return e.Cause }
 // single instance/writer for a file on a local filesystem. No rotation, tamper
 // resistance, or cross-host locking is implied. Existing incomplete JSONL tails
 // are rejected instead of silently deleting evidence.
+// On Unix, construction syncs the file and its parent directory before use.
+// Non-Unix platforms retain file flushing only, without directory-entry guarantees.
 type FileAuditSink struct {
 	mu     sync.Mutex
 	file   *os.File
@@ -118,6 +122,12 @@ type FileAuditSink struct {
 }
 
 func NewFileAuditSink(path string) (*FileAuditSink, error) {
+	return newFileAuditSink(path, (*os.File).Sync, syncAuditParents)
+}
+
+// The per-construction operations allow failure-order testing without mutable
+// package globals or changing the public sink API.
+func newFileAuditSink(path string, syncFile func(*os.File) error, syncParents func(string) error) (*FileAuditSink, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
@@ -133,11 +143,55 @@ func NewFileAuditSink(path string) (*FileAuditSink, error) {
 			err = errors.New("rbacgo: incomplete audit file tail; repair explicitly before appending")
 		}
 	}
+	if err == nil {
+		err = syncFile(file)
+	}
+	if err == nil {
+		err = syncParents(path)
+	}
 	if err != nil {
 		_ = file.Close()
 		return nil, err
 	}
 	return &FileAuditSink{file: file}, nil
+}
+
+func syncAuditParents(path string) error {
+	// Preserve file flushing on platforms without portable directory fsync
+	// (including Windows). Their narrower contract is documented.
+	switch runtime.GOOS {
+	case "aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios", "linux", "netbsd", "openbsd", "solaris":
+	default:
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	// A dangling leaf symlink may have created the file in another directory.
+	// Sync both the supplied path's parent and the resolved file's parent.
+	parents := []string{filepath.Dir(path), filepath.Dir(resolved)}
+	seen := make(map[string]bool, len(parents))
+	for _, parent := range parents {
+		absolute, err := filepath.Abs(parent)
+		if err != nil {
+			return err
+		}
+		if seen[absolute] {
+			continue
+		}
+		seen[absolute] = true
+		directory, err := os.Open(parent)
+		if err != nil {
+			return err
+		}
+		syncErr := directory.Sync()
+		closeErr := directory.Close()
+		if err := errors.Join(syncErr, closeErr); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *FileAuditSink) Emit(ctx context.Context, event AuditEvent) error {

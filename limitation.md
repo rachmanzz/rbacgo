@@ -85,7 +85,10 @@
   exporter. Snapshot reads counters individually. Configure the application's
   own authenticated exporter and cardinality/retention policy.
 - Durable file audit uses synchronous append and fsync on a persistent
-  filesystem; tmpfs cannot preserve events across restart. One local writer is
+  filesystem; tmpfs cannot preserve events across restart. On Unix, construction
+  syncs the file and its parent directory before use; initialization errors
+  return no sink. Non-Unix platforms retain file flushing only, without a
+  directory-entry crash-durability guarantee. One local writer is
   supported; rotation, retention, backups and file access belong to the caller.
   It is not tamper-resistant, a distributed outbox, or atomic with SQL mutations.
   AuditWriteError.Committed identifies changes that succeeded before audit

@@ -163,6 +163,14 @@ func equalAttribute(a, b any) bool {
 
 func conditionMatches(c Condition, attrs Attributes) (match, known bool) {
 	value, exists := attrs[c.Attribute]
+	// Presence is meaningful only for a valid JSON fact. Otherwise an exists
+	// allow could succeed, or a not_exists deny could be ruled out, using a
+	// malformed value. Missing facts retain normal presence semantics.
+	if exists {
+		if _, err := json.Marshal(value); err != nil {
+			return false, false
+		}
+	}
 	if c.Operator == "exists" {
 		return exists, true
 	}
@@ -179,9 +187,6 @@ func conditionMatches(c Condition, attrs Attributes) (match, known bool) {
 		if !ok {
 			return false, false
 		}
-	}
-	if _, err := json.Marshal(value); err != nil {
-		return false, false
 	}
 	if _, err := json.Marshal(expected); err != nil {
 		return false, false

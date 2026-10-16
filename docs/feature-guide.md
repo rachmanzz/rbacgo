@@ -56,7 +56,10 @@ Operators are eq, ne, in, not_in, gt, ge, lt, le, exists, and not_exists.
 Values must be JSON-serializable; membership operators require a list.
 Numeric comparisons preserve integer precision. OtherAttribute compares two
 facts, such as resource.owner to subject.id; do not combine it with Value.
-An empty condition list matches unconditionally.
+An empty condition list matches unconditionally. Presence operators validate
+present facts too: invalid JSON facts are unknown, not proof of presence or
+absence. A present null is valid and satisfies exists; an absent key satisfies
+not_exists.
 
 The engine supplies subject.id and tenant.id, overriding caller-supplied values.
 All other facts must come from trusted authentication/resource/server data.
@@ -128,7 +131,15 @@ mutation attempts are not a separate event stream; management decisions are
 audited. Raw attributes and permission bodies are omitted. Backend error
 strings may contain operational details.
 
-FileAuditSink appends JSONL and fsyncs every acknowledged event. Persistence
+FileAuditSink appends JSONL and fsyncs every acknowledged event. Construction
+first validates the existing tail and syncs the file. On Unix, it then syncs
+the containing directory before returning a usable sink, including on reopen
+after a prior creation failure. If a leaf symlink targets another directory,
+both parent directories are synchronized. Directory synchronization requires permission to open those directories.
+Initialization errors close the handle and return no sink, preserving existing
+audit evidence. Non-Unix
+platforms, including Windows, retain file flushing only; directory-entry crash
+durability is not promised there. Persistence
 across restart requires a persistent filesystem; a temporary tmpfs path (used
 by the example/benchmark) does not provide that guarantee. Use one
 instance/writer for a local regular file. Incomplete tails are rejected rather

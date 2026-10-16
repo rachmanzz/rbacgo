@@ -1,0 +1,60 @@
+package main
+
+import (
+ "context"
+ "encoding/json"
+ "fmt"
+ "os"
+ "path/filepath"
+
+ r "github.com/rachmanzz/rbacgo"
+)
+
+func check(err error) { if err!=nil { panic(err) } }
+func main() {
+ ctx:=context.Background()
+ cyclic:=map[string]any{}
+ cyclic["self"]=cyclic
+ passed:=0
+ for _,backend:=range []string{"memory","sqlite"} {
+  opt:=r.WithMemoryStore()
+  if backend=="sqlite" { opt=r.WithSQLite(":memory:") }
+  e,err:=r.New(r.WithTenant("audit"),opt,r.WithPolicyRules())
+  check(err)
+  check(e.RegisterRoles(ctx,r.Role{Name:"admin",Permissions:[]r.Permission{{Resource:"roles",Action:"manage"}}},r.Role{Name:"reader",Permissions:[]r.Permission{{Resource:"doc",Action:"read"}}}))
+  check(e.AssignRole(ctx,"root","admin"))
+  check(e.AssignRole(ctx,"alice","reader"))
+  for _,operator:=range []string{"exists","not_exists"} {
+   check(e.SetRoleRules(ctx,"root","reader",[]r.PolicyRule{{Effect:r.EffectDeny,Resource:"doc",Action:"read",Conditions:[]r.Condition{{Attribute:"approval",Operator:operator},{Attribute:"locked",Operator:"eq",Value:true}}}}))
+   for _,value:=range []any{json.RawMessage("invalid JSON"),cyclic} {
+    for _,locked:=range []bool{false,true} {
+     allowed,err:=e.EnforceAttributesCtx(ctx,"alice","doc","read",r.Attributes{"approval":value,"locked":locked})
+     check(err)
+     if allowed==locked { panic(fmt.Sprintf("%s %s locked=%t unexpected allowed=%t",backend,operator,locked,allowed)) }
+     passed++
+    }
+   }
+  }
+  check(e.Shutdown(ctx))
+ }
+ dir,err:=os.MkdirTemp("","rbacgo-audit-v6-")
+ check(err)
+ defer os.RemoveAll(dir)
+ check(os.Chdir(dir))
+ for i:=range 3 {
+  sink,err:=r.NewFileAuditSink("audit.jsonl")
+  check(err)
+  check(sink.Emit(ctx,r.AuditEvent{Operation:fmt.Sprint(i)}))
+  check(sink.Close())
+ }
+ file,err:=os.Open(filepath.Join(dir,"audit.jsonl"))
+ check(err)
+ decoder:=json.NewDecoder(file)
+ for i:=range 3 {
+  var event r.AuditEvent
+  check(decoder.Decode(&event))
+  if event.Operation!=fmt.Sprint(i) { panic("reopen lost or reordered evidence") }
+ }
+ check(file.Close())
+ fmt.Printf("PASS: %d mixed-condition checks; relative-path audit creation and two reopens preserved 3 events\n",passed)
+}

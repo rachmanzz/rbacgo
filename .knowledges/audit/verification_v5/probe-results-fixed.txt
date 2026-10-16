@@ -1,0 +1,9 @@
+backend=memory fact=NaN action=approve allowed=false err=<nil> (documented fail-closed expectation: false)
+backend=memory fact=NaN action=read allowed=false err=<nil> (documented fail-closed expectation: false)
+backend=memory fact=function action=approve allowed=false err=<nil> (documented fail-closed expectation: false)
+backend=memory fact=function action=read allowed=false err=<nil> (documented fail-closed expectation: false)
+backend=sqlite fact=NaN action=approve allowed=false err=<nil> (documented fail-closed expectation: false)
+backend=sqlite fact=NaN action=read allowed=false err=<nil> (documented fail-closed expectation: false)
+backend=sqlite fact=function action=approve allowed=false err=<nil> (documented fail-closed expectation: false)
+backend=sqlite fact=function action=read allowed=false err=<nil> (documented fail-closed expectation: false)
+New audit file acknowledged: /tmp/rbacgo-fsync-probe-1577991490.jsonl

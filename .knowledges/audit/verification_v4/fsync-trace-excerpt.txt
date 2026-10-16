@@ -1,0 +1,3 @@
+296311 openat(AT_FDCWD</home/natadana/rahman-project/rbacgo>, "/tmp/rbacgo-fsync-probe-1166950495.jsonl", O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0600) = 4</tmp/rbacgo-fsync-probe-1166950495.jsonl>
+296311 openat(AT_FDCWD</home/natadana/rahman-project/rbacgo>, "/tmp/rbacgo-fsync-probe-1166950495.jsonl", O_RDWR|O_CREAT|O_APPEND|O_CLOEXEC, 0600) = 4</tmp/rbacgo-fsync-probe-1166950495.jsonl>
+296311 fsync(4</tmp/rbacgo-fsync-probe-1166950495.jsonl>) = 0

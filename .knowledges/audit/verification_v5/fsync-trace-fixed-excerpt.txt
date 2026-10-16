@@ -1,0 +1,3 @@
+307918 fsync(4</tmp/rbacgo-fsync-probe-1577991490.jsonl>) = 0
+307918 fsync(7</tmp>)                   = 0
+307918 fsync(4</tmp/rbacgo-fsync-probe-1577991490.jsonl>) = 0

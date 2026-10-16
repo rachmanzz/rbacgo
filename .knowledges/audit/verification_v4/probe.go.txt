@@ -1,0 +1,50 @@
+package main
+
+import (
+ "context"
+ "fmt"
+ "math"
+ "os"
+
+ r "github.com/rachmanzz/rbacgo"
+)
+
+func check(err error) { if err != nil { panic(err) } }
+
+func main() {
+ for _, backend := range []string{"memory", "sqlite"} {
+  option := r.WithMemoryStore()
+  if backend == "sqlite" { option = r.WithSQLite(":memory:") }
+  e, err := r.New(r.WithTenant("audit"), option, r.WithPolicyRules())
+  check(err)
+  ctx := context.Background()
+  check(e.RegisterRoles(ctx,
+   r.Role{Name:"admin", Permissions:[]r.Permission{{Resource:"roles",Action:"manage"}}},
+   r.Role{Name:"worker", Permissions:[]r.Permission{{Resource:"document",Action:"read"}}},
+  ))
+  check(e.AssignRole(ctx,"admin","admin"))
+  check(e.AssignRole(ctx,"alice","worker"))
+  check(e.SetRoleRules(ctx,"admin","worker",[]r.PolicyRule{
+   {Effect:r.EffectAllow,Resource:"document",Action:"approve",Conditions:[]r.Condition{{Attribute:"approval",Operator:"exists"}}},
+   {Effect:r.EffectDeny,Resource:"document",Action:"read",Conditions:[]r.Condition{{Attribute:"approval",Operator:"not_exists"}}},
+  }))
+  for _, fact := range []struct{name string; value any}{{"NaN",math.NaN()},{"function",func(){}}} {
+   for _, action := range []string{"approve","read"} {
+    allowed, err := e.EnforceAttributesCtx(ctx,"alice","document",action,r.Attributes{"approval":fact.value})
+    fmt.Printf("backend=%s fact=%s action=%s allowed=%t err=%v (documented fail-closed expectation: false)\n",backend,fact.name,action,allowed,err)
+   }
+  }
+  check(e.Shutdown(ctx))
+ }
+ file, err := os.CreateTemp("", "rbacgo-fsync-probe-*.jsonl")
+ check(err)
+ path:=file.Name()
+ check(file.Close())
+ check(os.Remove(path))
+ sink,err:=r.NewFileAuditSink(path)
+ check(err)
+ check(sink.Emit(context.Background(),r.AuditEvent{Operation:"probe"}))
+ check(sink.Close())
+ fmt.Println("New audit file acknowledged:",path)
+ check(os.Remove(path))
+}

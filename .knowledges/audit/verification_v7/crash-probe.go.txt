@@ -1,0 +1,49 @@
+package main
+
+import (
+ "bufio"
+ "context"
+ "encoding/json"
+ "fmt"
+ "os"
+ "strconv"
+
+ r "github.com/rachmanzz/rbacgo"
+)
+
+func check(err error) { if err!=nil { fmt.Fprintln(os.Stderr,err);os.Exit(1) } }
+func main() {
+ if len(os.Args)<3 { os.Exit(2) }
+ mode,path:=os.Args[1],os.Args[2]
+ if mode=="resume" {
+  sink,err:=r.NewFileAuditSink(path)
+  check(err)
+  check(sink.Emit(context.Background(),r.AuditEvent{ID:"recovery",Operation:"recovery"}))
+  check(sink.Close())
+  fmt.Println("RECOVERED")
+  return
+ }
+ if mode=="incomplete" {
+  before,err:=os.ReadFile(path)
+  check(err)
+  sink,err:=r.NewFileAuditSink(path)
+  if err==nil { sink.Close();fmt.Fprintln(os.Stderr,"incomplete tail accepted");os.Exit(1) }
+  after,readErr:=os.ReadFile(path)
+  check(readErr)
+  if string(before)!=string(after) { fmt.Fprintln(os.Stderr,"incomplete evidence modified");os.Exit(1) }
+  fmt.Println("REJECTED_UNCHANGED")
+  return
+ }
+ sink,err:=r.NewFileAuditSink(path)
+ check(err)
+ input:=bufio.NewReader(os.Stdin)
+ for sequence:=0;;sequence++ {
+  event:=r.AuditEvent{ID:strconv.Itoa(sequence),Operation:"crash_probe"}
+  // Use a larger record for the in-flight-write case, without storing secrets.
+  if mode=="continuous" { event.Resource=string(make([]byte,4096)) }
+  check(sink.Emit(context.Background(),event))
+  ack,_:=json.Marshal(map[string]int{"ack":sequence})
+  fmt.Println(string(ack))
+  if mode=="barrier" { _,err:=input.ReadString('\n');check(err) }
+ }
+}

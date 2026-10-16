@@ -882,3 +882,19 @@ go mod tidy -diff check. Use one Dependabot Go update entry listing all module
 directories and a wildcard group, so related version updates are proposed
 together. Audit v3 records the earlier dependency baseline; it is historical
 verification evidence, not a claim about this later update.
+
+
+## Audit v4 policy and audit-file fixes (2026-10-16)
+
+Presence operators must validate present JSON facts before returning a known
+result. Invalid facts remain unknown, so they cannot satisfy an allow or rule
+out a candidate deny. Preserve missing-key behavior and valid null values.
+
+Initialize FileAuditSink by validating its existing tail, syncing the file,
+then syncing parent directories on Unix before exposing the sink. Reopening
+also syncs parents, because a previous failed initialization may have created
+the file without persisting its directory entry. Resolve leaf symlinks and
+sync both supplied and target parents when different. Preserve evidence and
+close handles on failure. Non-Unix platforms retain historical file flushing;
+no equivalent directory-entry guarantee is claimed. No API or Go-version
+change is needed. Verification is recorded in feature-audit_v5.md.

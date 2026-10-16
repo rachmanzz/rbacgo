@@ -1,0 +1,4 @@
+314127 fsync(4</tmp/TestAuditInitializationThroughDanglingSymlink3788694012/001/target/audit.jsonl>) = 0
+314127 fsync(7</tmp/TestAuditInitializationThroughDanglingSymlink3788694012/001/link>) = 0
+314127 fsync(7</tmp/TestAuditInitializationThroughDanglingSymlink3788694012/001/target>) = 0
+314127 fsync(4</tmp/TestAuditInitializationThroughDanglingSymlink3788694012/001/target/audit.jsonl>) = 0

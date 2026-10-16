@@ -1,0 +1,191 @@
+{
+  "filesystem": "ext4 (findmnt verified)",
+  "process_crash_rounds": 20,
+  "acknowledged_events_checked": 400,
+  "all_passed": true,
+  "deterministic_incomplete_tail": "rejected without mutation",
+  "actual_power_loss_tested": false,
+  "windows_runtime_tested": false,
+  "rounds": [
+    {
+      "mode": "barrier",
+      "round": 0,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 1,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 2,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 3,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 4,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 5,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 6,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 7,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 8,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "barrier",
+      "round": 9,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 0,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 1,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 2,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 3,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 4,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 5,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 6,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 7,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 8,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": true,
+      "recovery": "REJECTED_UNCHANGED",
+      "passed": true
+    },
+    {
+      "mode": "continuous",
+      "round": 9,
+      "acknowledged": 20,
+      "complete_before_recovery": 20,
+      "incomplete_tail": false,
+      "recovery": "RECOVERED",
+      "passed": true
+    }
+  ]
+}

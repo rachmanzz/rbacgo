@@ -1,0 +1,2 @@
+PASS: kernel EFBIG denies an otherwise allowed decision; prior bytes unchanged; sticky failure; explicit reopen recovers
+PASS: real directory EACCES returns no sink; restoring permissions permits initialization retry

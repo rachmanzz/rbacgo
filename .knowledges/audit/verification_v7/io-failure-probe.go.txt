@@ -1,0 +1,72 @@
+package main
+
+import (
+ "context"
+ "errors"
+ "fmt"
+ "os"
+ "path/filepath"
+ "syscall"
+
+ r "github.com/rachmanzz/rbacgo"
+)
+func check(err error) { if err!=nil { panic(err) } }
+func main() {
+ base:="/home/natadana/rahman-project/rbacgo/.knowledges/audit/verification_v7/runtime"
+ dir,err:=os.MkdirTemp(base,"io-failure-")
+ check(err)
+ defer os.RemoveAll(dir)
+ ctx:=context.Background()
+ path:=filepath.Join(dir,"audit.jsonl")
+ sink,err:=r.NewFileAuditSink(path)
+ check(err)
+ defer sink.Close()
+ e,err:=r.New(r.WithTenant("audit"),r.WithMemoryStore(),r.WithAuditSink(sink))
+ check(err)
+ defer e.Shutdown(ctx)
+ check(e.RegisterRole(ctx,r.Role{Name:"reader",Permissions:[]r.Permission{{Resource:"doc",Action:"read"}}}))
+ check(e.AssignRole(ctx,"alice","reader"))
+ if !e.Enforce(ctx,"alice","doc","read") { panic("baseline permission denied") }
+ before,err:=os.ReadFile(path)
+ check(err)
+ var original syscall.Rlimit
+ check(syscall.Getrlimit(syscall.RLIMIT_FSIZE,&original))
+ limited:=original
+ limited.Cur=uint64(len(before))
+ check(syscall.Setrlimit(syscall.RLIMIT_FSIZE,&limited))
+ allowed,writeErr:=e.EnforceCtx(ctx,"alice","doc","read")
+ restoreErr:=syscall.Setrlimit(syscall.RLIMIT_FSIZE,&original)
+ check(restoreErr)
+ var auditErr *r.AuditWriteError
+ if allowed || !errors.As(writeErr,&auditErr) || auditErr.Committed || !errors.Is(writeErr,syscall.EFBIG) {
+  panic(fmt.Sprintf("write failure did not fail closed: allowed=%t, error=%v",allowed,writeErr))
+ }
+ after,err:=os.ReadFile(path)
+ check(err)
+ if string(before)!=string(after) { panic("rejected audit write changed existing evidence") }
+ if e.Enforce(ctx,"alice","doc","read") { panic("poisoned sink recovered implicitly") }
+ check(sink.Close())
+ reopened,err:=r.NewFileAuditSink(path)
+ check(err)
+ defer reopened.Close()
+ recovered,err:=r.New(r.WithTenant("audit"),r.WithStore(e.Store()),r.WithAuditSink(reopened))
+ check(err)
+ defer recovered.Shutdown(ctx)
+ if !recovered.Enforce(ctx,"alice","doc","read") { panic("explicit reopen did not recover") }
+ fmt.Println("PASS: kernel EFBIG denies an otherwise allowed decision; prior bytes unchanged; sticky failure; explicit reopen recovers")
+ if os.Geteuid()==0 { fmt.Println("SKIP: directory permission test under root");return }
+ restricted:=filepath.Join(dir,"restricted")
+ check(os.Mkdir(restricted,0700))
+ check(os.Chmod(restricted,0300))
+ failPath:=filepath.Join(restricted,"audit.jsonl")
+ rejected,parentErr:=r.NewFileAuditSink(failPath)
+ check(os.Chmod(restricted,0700))
+ if rejected!=nil || !errors.Is(parentErr,os.ErrPermission) {
+  panic(fmt.Sprintf("parent access failure did not reject initialization: %v, %v",rejected,parentErr))
+ }
+ retried,err:=r.NewFileAuditSink(failPath)
+ check(err)
+ check(retried.Emit(ctx,r.AuditEvent{Operation:"retry"}))
+ check(retried.Close())
+ fmt.Println("PASS: real directory EACCES returns no sink; restoring permissions permits initialization retry")
+}
