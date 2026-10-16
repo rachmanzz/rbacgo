@@ -2,6 +2,8 @@ package rbacgo
 
 import (
 	"context"
+	"database/sql"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -19,9 +21,14 @@ type permissionSet map[string]map[string]bool
 // allowed to perform an action on a resource based on their assigned roles and
 // the role hierarchy.
 type Enforcer struct {
-	store Store
-	env   *envConfig
-	cache CacheBackend
+	store        Store
+	env          *envConfig
+	cache        CacheBackend
+	logger       *slog.Logger
+	metrics      *Metrics
+	audit        AuditSink
+	wildcards    bool
+	rulesEnabled bool
 	// cacheMu orders cache writes against invalidation; cacheGeneration detects
 	// lookups that began before a mutation or remote invalidation.
 	cacheMu         sync.Mutex
@@ -30,7 +37,8 @@ type Enforcer struct {
 	// Required: New returns ErrTenantRequired without it.
 	tenant string
 	// manageRes/manageAct is the capability required for role-management
-	// operations (DeleteRole / UnassignRole). Default: ("roles", "manage").
+	// operations (UpdateRole / DeleteRole / UnassignRole and the As methods).
+	// Default: ("roles", "manage").
 	manageRes string
 	manageAct string
 	// policyVersion falls back to this local counter when no shared version
@@ -52,23 +60,33 @@ type Enforcer struct {
 	closeOnce        sync.Once
 	// ownedClient is the Redis client created by WithConfigFromEnv; Close
 	// releases it. Clients passed by the caller are never closed.
-	ownedClient *redis.Client
+	ownedClient  *redis.Client
+	ownedDBs     []*sql.DB
+	shutdown     atomic.Bool
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
 }
 
 // Option configures an Enforcer. Options are applied in order; environment
 // configuration only fills values not already set explicitly.
 type Option func(*Enforcer) error
 
-// New creates an Enforcer. With no options it uses an embedded SQLite store
-// in memory (":memory:") and a default in-memory LRU lookup cache (1024
-// entries, 5m TTL) so every decision is an O(1) cache hit on average. Supply
+// New creates a tenant-scoped Enforcer. Its default storage is embedded SQLite
+// in memory (":memory:") with an in-memory LRU lookup cache (1024 entries,
+// 5m TTL). Warm in-memory cache hits use constant-time lookups; misses rebuild
+// the effective permission set from the store. Supply
 // WithSQLStore / WithSQLite / WithStore / WithConfigFromEnv to customise
 // persistence and WithLRU to replace the cache backend; WithConfigFromEnv
 // with RBAC_CACHE=none disables the cache entirely. An Enforcer must be
 // scoped to a tenant: WithTenant is required and New returns
 // ErrTenantRequired without it.
-func New(opts ...Option) (*Enforcer, error) {
-	e := &Enforcer{manageRes: "roles", manageAct: "manage"}
+func New(opts ...Option) (result *Enforcer, err error) {
+	e := &Enforcer{manageRes: "roles", manageAct: "manage", shutdownDone: make(chan struct{})}
+	defer func() {
+		if result == nil {
+			_ = e.Shutdown(context.Background())
+		}
+	}()
 	for _, opt := range opts {
 		if err := opt(e); err != nil {
 			return nil, err
@@ -79,10 +97,9 @@ func New(opts ...Option) (*Enforcer, error) {
 			return nil, err
 		}
 	}
-	// Default lookup cache: turns each Enforce/PermissionView into a bounded,
-	// O(1) map read instead of rebuilding the effective permission set on
-	// every call. Skipped when env config (WithConfigFromEnv) took charge of
-	// the cache — it may legitimately choose "none" or a Redis backend.
+	// Default lookup cache: reuse effective permission sets on cache hits
+	// instead of rebuilding them from the store on every call. Skipped when
+	// env config (WithConfigFromEnv) took charge of the cache — it may legitimately choose "none" or a Redis backend.
 	if e.cache == nil && e.env == nil {
 		e.cache = NewMemoryLRU(1024, 5*time.Minute)
 	}
@@ -143,9 +160,12 @@ func (e *Enforcer) unscopeRoles(names []string) []string {
 
 // RegisterRole registers a single role. Duplicate names and cycles are
 // rejected (ErrRoleExists, ErrParentNotFound, ErrCycleDetected). The role
-// belongs to this Enforcer's tenant: the tenant's admin/owner assigns and
-// manages it through this Enforcer only.
+// belongs to this Enforcer's tenant. This is a trusted provisioning API:
+// it does not authorize the caller. Use RegisterRoleAs for capability checking.
 func (e *Enforcer) RegisterRole(ctx context.Context, role Role) error {
+	if e.shutdown.Load() {
+		return ErrEnforcerClosed
+	}
 	if !validRole(role) {
 		return ErrInvalidRole
 	}
@@ -155,12 +175,16 @@ func (e *Enforcer) RegisterRole(ctx context.Context, role Role) error {
 	e.bumpPolicyVersion(ctx)
 	e.flushCache()
 	e.invalidateAll(ctx)
-	return nil
+	return e.recordMutation(ctx, "register_role", "", "", role.Name)
 }
 
 // RegisterRoles registers several roles in order. Registration stops at the
-// first error.
+// first error; earlier registrations remain committed. It does not authorize
+// the caller. Use RegisterRolesAs for capability checking.
 func (e *Enforcer) RegisterRoles(ctx context.Context, roles ...Role) error {
+	if e.shutdown.Load() {
+		return ErrEnforcerClosed
+	}
 	for _, r := range roles {
 		if err := e.RegisterRole(ctx, r); err != nil {
 			return err
@@ -170,16 +194,19 @@ func (e *Enforcer) RegisterRoles(ctx context.Context, roles ...Role) error {
 }
 
 // AssignRole assigns a role to a user. Both belong to this Enforcer's
-// tenant; assignment is performed by the tenant's admin/owner through this
-// Enforcer.
+// tenant. This is a trusted provisioning API: it does not authorize the caller.
+// Use AssignRoleAs for capability checking.
 func (e *Enforcer) AssignRole(ctx context.Context, userID, roleName string) error {
+	if e.shutdown.Load() {
+		return ErrEnforcerClosed
+	}
 	if err := e.store.AssignRole(ctx, e.userKey(userID), e.roleKey(roleName)); err != nil {
 		return err
 	}
 	e.bumpPolicyVersion(ctx)
 	e.dropCache(userID)
 	e.invalidateUser(ctx, userID)
-	return nil
+	return e.recordMutation(ctx, "assign_role", "", userID, roleName)
 }
 
 // DeleteRole removes a role. Only callers holding the role-management
@@ -201,7 +228,7 @@ func (e *Enforcer) DeleteRole(ctx context.Context, userID, roleName string) erro
 	e.bumpPolicyVersion(ctx)
 	e.flushCache()
 	e.invalidateAll(ctx)
-	return nil
+	return e.recordMutation(ctx, "delete_role", userID, "", roleName)
 }
 
 // UnassignRole removes a role from targetUserID. Only callers holding the
@@ -222,7 +249,7 @@ func (e *Enforcer) UnassignRole(ctx context.Context, userID, targetUserID, roleN
 	e.bumpPolicyVersion(ctx)
 	e.dropCache(targetUserID)
 	e.invalidateUser(ctx, targetUserID)
-	return nil
+	return e.recordMutation(ctx, "unassign_role", userID, targetUserID, roleName)
 }
 
 // UpdateRole replaces the permissions and parents of an existing role in
@@ -247,15 +274,19 @@ func (e *Enforcer) UpdateRole(ctx context.Context, userID string, role Role) err
 	e.bumpPolicyVersion(ctx)
 	e.flushCache()
 	e.invalidateAll(ctx)
-	return nil
+	return e.recordMutation(ctx, "update_role", userID, "", role.Name)
 }
 
 // ListRoles returns all roles of this Enforcer's tenant, alphabetically
 // sorted, with names stripped of the tenant prefix. Stores that do not
 // implement role enumeration report ErrUnsupported. Stores implementing
 // RoleListerByPrefix are asked for the tenant's prefix directly, so shared
-// stores do not load every tenant's roles.
+// stores do not load every tenant's roles. This is a trusted read API without
+// caller authorization; use ListRolesAs for capability checking.
 func (e *Enforcer) ListRoles(ctx context.Context) ([]Role, error) {
+	if e.shutdown.Load() {
+		return nil, ErrEnforcerClosed
+	}
 	prefix := e.tenant + tenantSep
 	var (
 		roles []Role
@@ -334,6 +365,11 @@ func (e *Enforcer) bumpPolicyVersion(ctx context.Context) {
 		if v, err := vs.NextPolicyVersion(ctx); err == nil {
 			n = v
 			e.policyVersion.Store(n)
+		} else {
+			if e.metrics != nil {
+				e.metrics.policyVersionErrors.Add(1)
+			}
+			e.logError(ctx, "policy version increment failed; using local counter", err)
 		}
 	}
 }
@@ -345,6 +381,11 @@ func (e *Enforcer) currentPolicyVersion(ctx context.Context) uint64 {
 		if v, err := vs.PolicyVersion(ctx); err == nil {
 			e.policyVersion.Store(v)
 			return v
+		} else {
+			if e.metrics != nil {
+				e.metrics.policyVersionErrors.Add(1)
+			}
+			e.logError(ctx, "policy version read failed; using local counter", err)
 		}
 	}
 	return e.policyVersion.Load()
@@ -358,12 +399,14 @@ func (e *Enforcer) Enforce(ctx context.Context, userID, resource, action string)
 }
 
 // EnforceCtx is like Enforce but also reports the underlying error.
-func (e *Enforcer) EnforceCtx(ctx context.Context, userID, resource, action string) (bool, error) {
+func (e *Enforcer) EnforceCtx(ctx context.Context, userID, resource, action string) (allowed bool, err error) {
+	defer e.recordDecision(ctx, e.decisionStarted(), "enforce", userID, resource, action, &allowed, &err)
 	perms, err := e.permissionsFor(ctx, userID)
 	if err != nil {
+		e.logError(ctx, "permission lookup failed", err)
 		return false, err
 	}
-	return perms[resource][action], nil
+	return e.evaluateRules(ctx, userID, resource, action, e.matchPermission(perms, resource, action), contextAttributes(ctx))
 }
 
 // EnforceOwned reports whether userID may perform action on the resource
@@ -389,21 +432,25 @@ func (e *Enforcer) EnforceOwned(ctx context.Context, userID, owner, group, resou
 }
 
 // EnforceOwnedCtx is like EnforceOwned but also reports the underlying error.
-func (e *Enforcer) EnforceOwnedCtx(ctx context.Context, userID, owner, group, resource, action string) (bool, error) {
+func (e *Enforcer) EnforceOwnedCtx(ctx context.Context, userID, owner, group, resource, action string) (allowed bool, err error) {
+	defer e.recordDecision(ctx, e.decisionStarted(), "enforce_owned", userID, resource, action, &allowed, &err)
 	perms, err := e.permissionsFor(ctx, userID)
 	if err != nil {
+		e.logError(ctx, "permission lookup failed", err)
 		return false, err
 	}
-	if perms[resource][action] || perms[resource][action+":any"] {
-		return true, nil
+	allowed = e.matchPermission(perms, resource, action) || e.matchPermission(perms, resource, action+":any") ||
+		e.matchPermission(perms, resource, action+":self") && (owner == userID || action == "create") ||
+		group != "" && e.matchPermission(perms, resource, action+":grp:"+group)
+	if !e.rulesEnabled {
+		return allowed, nil
 	}
-	if perms[resource][action+":self"] && (owner == userID || action == "create") {
-		return true, nil
+	attrs := make(Attributes)
+	for k, v := range contextAttributes(ctx) {
+		attrs[k] = v
 	}
-	if group != "" && perms[resource][action+":grp:"+group] {
-		return true, nil
-	}
-	return false, nil
+	attrs["resource.owner"], attrs["resource.group"] = owner, group
+	return e.evaluateRules(ctx, userID, resource, action, allowed, attrs)
 }
 
 // PermissionView returns a user's access-rights snapshot for a
@@ -411,6 +458,9 @@ func (e *Enforcer) EnforceOwnedCtx(ctx context.Context, userID, owner, group, re
 // permission set (own + inherited, deduplicated, alphabetically sorted).
 // Permissions reflect the cache when one is enabled.
 func (e *Enforcer) PermissionView(ctx context.Context, userID string) (PermissionView, error) {
+	if e.shutdown.Load() {
+		return PermissionView{}, ErrEnforcerClosed
+	}
 	roles, err := e.store.GetRoles(ctx, e.userKey(userID))
 	if err != nil {
 		return PermissionView{}, err
@@ -446,6 +496,9 @@ func (e *Enforcer) PermissionView(ctx context.Context, userID string) (Permissio
 
 // HasRole reports whether userID holds the given role (including inheritance).
 func (e *Enforcer) HasRole(ctx context.Context, userID, roleName string) (bool, error) {
+	if e.shutdown.Load() {
+		return false, ErrEnforcerClosed
+	}
 	roles, err := e.store.GetRoles(ctx, e.userKey(userID))
 	if err != nil {
 		return false, err
@@ -462,15 +515,24 @@ func (e *Enforcer) HasRole(ctx context.Context, userID, roleName string) (bool, 
 // permissionsFor returns the effective permission set for a user, consulting
 // the cache when enabled.
 func (e *Enforcer) permissionsFor(ctx context.Context, userID string) (permissionSet, error) {
+	if e.shutdown.Load() {
+		return nil, ErrEnforcerClosed
+	}
 	e.cacheMu.Lock()
 	generation := e.cacheGeneration
 	e.cacheMu.Unlock()
 	if e.cache != nil {
 		if v, ok := e.cache.Get(e.cacheKey(userID)); ok {
 			if ps, ok := v.(permissionSet); ok {
+				if e.metrics != nil {
+					e.metrics.cacheHits.Add(1)
+				}
 				return ps, nil
 			}
 		}
+	}
+	if e.metrics != nil {
+		e.metrics.cacheMisses.Add(1)
 	}
 	versioned, shared := e.cache.(GenerationCacheBackend)
 	var token string
@@ -509,7 +571,16 @@ func (e *Enforcer) flushCache() {
 	defer e.cacheMu.Unlock()
 	e.cacheGeneration++
 	if e.cache != nil {
-		e.cache.Flush()
+		if flusher, ok := e.cache.(interface{ FlushContext(context.Context) error }); ok {
+			if err := flusher.FlushContext(context.Background()); err != nil {
+				if e.metrics != nil {
+					e.metrics.invalidationErrors.Add(1)
+				}
+				e.logError(context.Background(), "cache flush failed", err)
+			}
+		} else {
+			e.cache.Flush()
+		}
 	}
 }
 
@@ -532,7 +603,12 @@ func (e *Enforcer) invalidateAll(ctx context.Context) {
 	if e.invalidator == nil {
 		return
 	}
-	_ = e.invalidator.Publish(ctx, InvalidationEvent{Kind: InvalidateFlush})
+	if err := e.invalidator.Publish(ctx, InvalidationEvent{Kind: InvalidateFlush}); err != nil {
+		if e.metrics != nil {
+			e.metrics.invalidationErrors.Add(1)
+		}
+		e.logError(ctx, "cache invalidation publish failed", err)
+	}
 }
 
 // invalidateUser broadcasts a drop event after one user's assignments
@@ -543,7 +619,12 @@ func (e *Enforcer) invalidateUser(ctx context.Context, userID string) {
 	if e.invalidator == nil {
 		return
 	}
-	_ = e.invalidator.Publish(ctx, InvalidationEvent{Kind: InvalidateDrop, User: e.cacheKey(userID)})
+	if err := e.invalidator.Publish(ctx, InvalidationEvent{Kind: InvalidateDrop, User: e.cacheKey(userID)}); err != nil {
+		if e.metrics != nil {
+			e.metrics.invalidationErrors.Add(1)
+		}
+		e.logError(ctx, "cache invalidation publish failed", err)
+	}
 }
 
 // invalidationLoop consumes events from the shared invalidator and applies

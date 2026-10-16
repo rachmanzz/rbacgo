@@ -11,7 +11,7 @@ import (
 // TestConcurrentMixedWorkload hammers a single shared enforcer+store with
 // every API at once: register/update/delete roles, assign/unassign, enforce,
 // owned enforces, permission views, and role listing. Run under -race it
-// proves the enforcer, memory store, and cache are safe under real mixed
+// checks the enforcer, memory store, and cache under real mixed
 // contention.
 func TestConcurrentMixedWorkload(t *testing.T) {
 	ctx := context.Background()

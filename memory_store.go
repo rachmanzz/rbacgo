@@ -9,7 +9,9 @@ import (
 // memoryStore is a concurrency-safe, pure-Go Store kept entirely in RAM.
 // Data is lost on restart.
 type memoryStore struct {
-	mu sync.RWMutex
+	mu       sync.RWMutex
+	rules    map[string][]PolicyRule
+	metadata map[string]map[string]string
 	// roles: role name -> role; users: user ID -> roles (insertion order);
 	// roleUsers: role name -> set of assigned user IDs (O(1) membership
 	// index for duplicate checks and in-use lookups).
@@ -23,6 +25,8 @@ type memoryStore struct {
 func NewMemoryStore() Store {
 	return &memoryStore{
 		roles:     make(map[string]Role),
+		rules:     make(map[string][]PolicyRule),
+		metadata:  make(map[string]map[string]string),
 		users:     make(map[string][]string),
 		roleUsers: make(map[string]map[string]struct{}),
 	}
@@ -164,6 +168,8 @@ func (s *memoryStore) DeleteRole(_ context.Context, name string) error {
 		return ErrRoleInUse
 	}
 	delete(s.roles, name)
+	delete(s.rules, name)
+	delete(s.metadata, name)
 	delete(s.roleUsers, name)
 	// Cascade: drop the deleted role from every child role's parent list.
 	for roleName, role := range s.roles {

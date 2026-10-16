@@ -3,9 +3,12 @@
 - **Status:** Draft
 - **Purpose:** Divide ALL planned work (from AGENTS.md, PRD.md, plan.md, gap.md,
   limitation.md, decision-log.md) into clear, sequential work phases.
-- **Last updated:** 2026-08-02
+- **Last updated:** 2026-10-16
 
 ---
+
+> Historical execution log: completed checkboxes and measurements describe
+> their dated revision. Consult README.md and gap.md for current behavior.
 
 ## Phase Overview
 
@@ -54,8 +57,8 @@
 - [x] Enforcer: `Enforce(userID, resource, action) bool` (FR-3).
 - [x] Role hierarchy resolution + **cycle detection** (FR-2, PRD §4).
 - [x] `Store` interface (FR-6) + SQL store implementation — pluggable via user-supplied
-  `*sql.DB` (pgx5/pgxpool/stdlib, go-sqlite3, or any `database/sql` driver).
-- **Default store: embedded SQLite** — `rbacgo.New()` works zero-config (`:memory:`);
+  `*sql.DB` (pgx5/pgxpool/stdlib, go-sqlite3, PostgreSQL/SQLite drivers).
+- **Default store: embedded SQLite** — `New(WithTenant("acme"))` needs no database setup (`:memory:`);
   file path supported for persistence.
 - [x] Config from env (`WithConfigFromEnv`, prefix `RBAC_` default, `WithEnvPrefix` override) —
   store, SQLite path, cache capacity/TTL, Redis settings (FR-9, ADR-009).
@@ -66,7 +69,7 @@
 ### Acceptance criteria
 - [x] Enforcement returns correct decisions for direct + inherited permissions.
 - [x] Cycles are rejected on registration.
-- [x] `rbacgo.New()` works zero-config via embedded SQLite (`:memory:`); file-path persistence
+- [x] `New(WithTenant("acme"))` uses default embedded SQLite (`:memory:`); file-path persistence
   reloads state.
 - [x] SQL store persists and reloads state.
 - [x] All tests green; coverage ≥ 80%.
@@ -385,7 +388,7 @@ name; `rbac_roles` was rejected as redundant since "RBAC" already means
 ### adapters: no default user identity (P5.23, 2026-08-02)
 
 User decision: the middleware must not read the user ID from an HTTP header at
-all ("ngak usah ngurusin header apa yang dikirim"). Identity comes from the
+all ("do not choose which identity header applications should send"). Identity comes from the
 application's auth layer, and every app resolves it differently, so `WithUserID`
 must be provided explicitly.
 
@@ -408,8 +411,8 @@ must be provided explicitly.
 ### default LRU cache in New() (P5.25, 2026-08-06)
 
 User decision ("Default LRU cache" over the memoryStore-index option): make the
-lookup cache on out of the box so every `Enforce`/`PermissionView` is an O(1)
-hit on average instead of rebuilding the effective permission set per call.
+lookup cache available by default so warm Enforce hits reuse cached permission
+sets. Misses rebuild them; PermissionView additionally reads roles and versions.
 
 - [x] `New()` installs `NewMemoryLRU(1024, 5m)` when no cache was configured and
       the env path is inactive; `WithConfigFromEnv` is now marked active so
@@ -485,8 +488,10 @@ memory store so mutations no longer scan.
 - Re-check `limitation.md` for anything that changes scope.
 ### tenant scoping required (P5.27, 2026-08-06)
 
-User decision: "WithTenant wajib — terserah apa pun tenantnya (org atau
-lainnya), yang pasti di-assign oleh owner/admin org tersebut." Implemented.
+User decision: require WithTenant for any tenant identifier (organization or
+otherwise), with assignments managed by its owner/admin. Tenant namespacing is
+implemented; applications remain responsible for caller authentication and
+authorizing tenant access.
 
 - [x] `WithTenant` option; `New` returns `ErrTenantRequired` without it
       (blank/whitespace rejected). `TenantID()` getter.
@@ -509,7 +514,7 @@ lainnya), yang pasti di-assign oleh owner/admin org tersebut." Implemented.
 
 ### role update + list (P5.28, 2026-08-08)
 
-User request: "Tidak ada UpdateRole/ListRoles baru" — both were missing; user
+User request: "UpdateRole and ListRoles are missing" — both were missing; user
 chose "both". Implemented.
 
 - [x] `RoleUpdater` + `RoleLister` optional store interfaces (store.go),
@@ -599,8 +604,8 @@ backlog:
 
 ### owned permissions: self, grp, any (P5.30, 2026-08-09)
 
-User request: "create, update, delete ada 2 jenis: self, any", lalu
-"kalau hanya boleh mengubah di group tertentu, contoh department". Design
+User request: "create, update, and delete need self/any scopes", followed by
+"restrict changes to a particular group, such as a department". Design
 confirmed with the user: action suffix `:self`/`:grp:<id>`, owner and group
 as call arguments (group scopes the RESOURCE), plain (or `:any`) wins,
 `create:self` = `create`, generic `:grp:<id>`.
@@ -627,3 +632,29 @@ as call arguments (group scopes the RESOURCE), plain (or `:any`) wins,
       adapters green (root-only change).
 - [x] Commit + push — **only on explicit user request** (AGENTS.md); pending
       user command.
+
+### Feature audit remediation (2026-10-16, unreleased)
+
+- Added capability-checked RegisterRoleAs, RegisterRolesAs, AssignRoleAs,
+  and ListRolesAs; retained existing trusted APIs for compatibility/bootstrap.
+- Added Evict and ClearAndClose in every adapter. Cleanup waits for factories
+  outside the registry lock and closes Enforcers; Clear retains its old behavior.
+- Added optional slog logging for selected operational failures.
+- Corrected current API examples, SQL support, cache/performance claims,
+  authorization boundaries, owned-permission limitations, and project status.
+- See gap.md for remaining opportunities; these changes do not implement
+  ABAC, wildcard matching, a metrics API, or durable audit storage.
+
+### Feature completion requested after audit v2 (2026-10-16, unreleased)
+
+- Implemented shared bounded registries, idle eviction, context-aware factories,
+  request leases, terminal shutdown, and owned SQL cleanup.
+- Implemented opt-in wildcard/ABAC/deny evaluation, descriptive metadata,
+  atomic policy batches, metrics, and a durable synchronous file audit sink.
+- Added explicit MySQL syntax with an isolated MIT-licensed integration driver
+  module and per-primary Redis Cluster flushing.
+- Verified core/adapter races and live PostgreSQL/MySQL/Redis Cluster flows.
+- User explicitly approved the Go 1.26 minimum for Fiber/Gin/examples required
+  by the security fix in x/net v0.60.0. Recommended toolchain is Go 1.27.2.
+- See audit v3 for final validation and residual boundaries. Earlier roadmap
+  entries above are retained as historical scope decisions, not current gaps.

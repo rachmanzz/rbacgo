@@ -42,6 +42,13 @@ updates:
     groups:
       examples-deps:
         patterns: ["*"]
+  - package-ecosystem: "gomod"
+    directory: "/integration/mysql"
+    schedule:
+      interval: "weekly"
+    groups:
+      mysql-integration-deps:
+        patterns: ["*"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

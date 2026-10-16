@@ -28,6 +28,7 @@ func WithSQLite(path string) Option {
 			return err
 		}
 		e.store = s
+		e.ownedDBs = append(e.ownedDBs, s.(*sqlStore).db)
 		return nil
 	}
 }

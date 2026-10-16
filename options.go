@@ -17,8 +17,9 @@ func WithStore(s Store) Option {
 	}
 }
 
-// WithSQLStore wraps an existing *sql.DB (any database/sql driver, e.g. pgx /
-// pgxpool via the pgx stdlib adapter) in a SQL store. See NewSQLStore.
+// WithSQLStore wraps an existing *sql.DB in a SQL store. Supported dialects
+// are PostgreSQL, SQLite, and explicit MySQL; the caller owns the driver/pool.
+// Use WithSQLDialect(SQLDialectMySQL) for MySQL. See NewSQLStore.
 func WithSQLStore(db *sql.DB, opts ...SQLStoreOption) Option {
 	return func(e *Enforcer) error {
 		s, err := NewSQLStore(db, opts...)
@@ -49,8 +50,9 @@ func WithLRU(backend CacheBackend) Option {
 }
 
 // WithRoleManagementPermission overrides the capability required to manage
-// roles (RegisterRole / UpdateRole / DeleteRole / UnassignRole). The default
-// is the ("roles", "manage") permission.
+// roles through UpdateRole, DeleteRole, UnassignRole, and the As methods.
+// RegisterRole, RegisterRoles, AssignRole, and ListRoles remain trusted APIs
+// without caller authorization. The default permission is ("roles", "manage").
 func WithRoleManagementPermission(resource, action string) Option {
 	return func(e *Enforcer) error {
 		if strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
@@ -80,9 +82,9 @@ func WithPolicyVersionStore(vs PolicyVersioner) Option {
 // WithTenant sets the tenant (organization, workspace, app, …) this Enforcer
 // is scoped to. Required: New returns ErrTenantRequired without it. Roles,
 // users, and cache entries are namespaced by the tenant, so one shared store
-// can serve many tenants without cross-tenant access. The tenant owning a
-// role is the tenant of the Enforcer that registered it; assignments are
-// made by that tenant's admin/owner through this Enforcer.
+// can serve many tenants with isolated role and assignment namespaces.
+// The application must authenticate the caller and authorize tenant access;
+// namespacing does not establish that a caller is the tenant's admin/owner.
 //
 // The tenant ID must not contain the internal separator "::" — role and user
 // names are prefixed with it, so a tenant like "a::b" would share store keys

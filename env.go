@@ -95,8 +95,10 @@ func WithConfigFromEnv() Option {
 					sqlOpts = append(sqlOpts, WithTablePrefix(tablePrefix))
 				}
 				if err := WithSQLStore(db, sqlOpts...)(e); err != nil {
+					_ = db.Close()
 					return err
 				}
+				e.ownedDBs = append(e.ownedDBs, db)
 			case "memory":
 				e.store = NewMemoryStore()
 			default:

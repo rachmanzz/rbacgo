@@ -2,7 +2,7 @@ module github.com/rachmanzz/rbacgo
 
 go 1.25.7
 
-toolchain go1.25.12
+toolchain go1.27.2
 
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0

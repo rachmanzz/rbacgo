@@ -22,11 +22,12 @@ type User struct {
 }
 
 // PermissionView is the JSON-serializable snapshot of a user's access rights:
-// their directly assigned roles, their effective permission set (own +
+// their directly assigned roles, their ordinary RBAC allow set (own +
 // inherited, deduplicated, alphabetically sorted), and the policy version at
 // snapshot time. Marshal it directly as the response of a "my permissions"
 // endpoint; frontends compare PolicyVersion across snapshots to detect policy
-// changes without diffing the payload.
+// changes without diffing the payload. Wildcards are not expanded and conditional
+// rules/denies are not evaluated; always enforce backend actions in context.
 type PermissionView struct {
 	UserID        string              `json:"user_id"`
 	Roles         []string            `json:"roles"`

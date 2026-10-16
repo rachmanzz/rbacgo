@@ -471,8 +471,8 @@ the existing `roles`/`role_permissions`/`role_parents` naming pattern.
 ### Context
 
 Adapters defaulted to reading the `X-User-ID` request header. User feedback:
-the library must not concern itself with HTTP headers at all ("kita ngak usah
-ngurusin header apa yang dikirim") — real applications already resolve the
+the library must not choose an identity header convention ("applications
+decide which authentication context to use") — real applications already resolve the
 authenticated user in their own auth middleware (session, JWT claims, proxy
 header), and each app does it differently. A client-set header default is also
 an authorization risk when forgotten.
@@ -566,8 +566,8 @@ to take (b) as well.
 ### Context
 
 User scenario: 100 organizations sharing one RBAC deployment, each with its
-own roles and assignments ("bagaimana saya menentukan siapa yang memiliki
-role itu?"). The engine had no tenant concept: role names and user IDs were
+own roles and assignments ("how do I determine who owns
+that role?"). The engine had no tenant concept: role names and user IDs were
 global, so a shared store clashed cross-organization and ownership was only
 decided by calling convention.
 
@@ -602,7 +602,7 @@ decided by calling convention.
 
 - **Date:** 2026-08-08
 - **Status:** Accepted
-- **Reference:** user request ("Tidak ada UpdateRole/ListRoles baru" — both
+- **Reference:** user request ("UpdateRole and ListRoles are missing" — both
   confirmed missing, user chose "both"), phases P5.28
 
 ### Context
@@ -738,7 +738,7 @@ catch-all grant, and role metadata is a data-model extension.
 
 - **Date:** 2026-08-09
 - **Status:** Accepted
-- **Reference:** user request ("create, update, delete ada 2 jenis: self, any"),
+- **Reference:** user request ("create, update, and delete need self/any scopes"),
   phases P5.30; design choices confirmed with the user (action suffix,
   owner/group as call arguments, "any wins", `create:self` = `create`,
   group scopes the resource)
@@ -790,8 +790,7 @@ of department hr".
 - **Date:** 2026-08-09
 - **Status:** Accepted
 - **Reference:** audit finding (cross-instance cache staleness bounded only by
-  TTL), user request ("buat potensi perbaikan: implementasi pub/sub
-  invalidation (skala besar)")
+  TTL), user request (translated: "implement pub/sub invalidation for scale")
 
 ### Context
 
@@ -831,3 +830,42 @@ TTL) — stale authorization decisions at scale. Staleness was documented
 - One extra pub/sub round-trip per mutation (async, best-effort, on the same
   Redis the app already uses for the cache).
 - Single-instance users unaffected: without the option, behavior is unchanged.
+
+## ADR-026 — Complete feature-audit opportunities through optional capabilities
+
+- **Date:** 2026-10-16
+- **Status:** Accepted (user requested completion after audit v2)
+
+### Decision
+
+Retain legacy exact matching and trusted provisioning APIs. Add opt-in wildcard
+and allow/deny JSON attribute rules through optional Store capabilities. Store
+metadata separately so Role retains its original layout. Atomic batches modify
+policy data in one transaction/copy-swap; post-commit audit/version/cache work is
+explicitly outside that transaction. A failed audit denies a decision and reports
+already-committed mutations through AuditWriteError.Committed.
+
+Share one tenant registry across adapters, with optional capacity/idle eviction,
+context-aware factories, leases held by middleware, and terminal Shutdown.
+Enforcer.Shutdown closes only resources it created; Close retains its older
+nonterminal contract. Use a separate MySQL test-driver module to preserve core
+runtime dependencies and the permissive-license policy. Cluster flushes scan
+primaries and route individual deletes, without claiming atomic revocation.
+
+### Compatibility and security
+
+The user explicitly approved raising Fiber/Gin/examples to minimum Go 1.26.0
+for x/net v0.60.0. Core/http/echo remain at minimum 1.25.7. Go 1.27.2 is the
+recommended and CI toolchain following the vulnerability scan. Arbitrary policy
+scripting, distributed audit outboxes, and automatic termination of uncooperative
+callbacks are not promised by these APIs.
+
+### Concurrent SQL write integrity
+
+PostgreSQL/MySQL store mutations take a transaction-scoped meta-row lock per
+table prefix before reading graph/existence invariants. A PostgreSQL regression
+first demonstrated that disjoint concurrent parent changes both committed and
+created a cycle. After serialization, exactly one commits and the other returns
+ErrCycleDetected. Overlapping deletion/detail/assignment tests also reject stale
+writes. This deliberately trades write concurrency for graph and role-detail
+integrity across pools/processes; reads remain non-snapshot operations.

@@ -1,55 +1,36 @@
-# Gaps Analysis — rbacgo
+# Feature Status and Remaining Boundaries — rbacgo
 
-- **Status:** Draft
-- **Last updated:** 2026-08-02
+- **Last updated:** 2026-10-16
+- **Reference:** .knowledges/audit/feature-audit_v3.md and docs/feature-guide.md
+- **Release status:** Working-tree changes; not tagged or published.
 
-## 1. Purpose
+## Completed feature-audit work
 
-Document the gap between the current repository state and the target defined in `PRD.md`
-and `plan.md`, so work can be prioritized and tracked.
+| Area | Implemented | Boundary |
+| --- | --- | --- |
+| Core RBAC | Roles, assignments, hierarchy, cycle checks, ownership/group scopes | Authentication and trusted ownership context belong to the application |
+| Wildcards/superadmin | Opt-in complete-field star matching | No path glob/regex; explicit deny still wins |
+| ABAC and deny rules | Inherited allow/deny rules with JSON conditions and attribute references | Opt-in on every Enforcer; missing deny facts fail closed; no arbitrary scripts |
+| Role metadata | Checked descriptive metadata APIs and memory/SQL persistence | Metadata never authorizes access; original Role struct unchanged |
+| Administration | Checked As variants plus update/delete/unassign | Trusted provisioning APIs remain for bootstrap and compatibility |
+| Atomic batches | Memory copy-swap and SQL transactions for policy data | Audit/version/cache work is post-commit; decisions are not atomic snapshots |
+| Registry lifecycle | Shared implementation, optional capacity/idle eviction, cancellable factories, leases, shutdown | Capacity bounds cached entries; callbacks must cooperate; direct Get holds no lease |
+| Observability | Metrics, slog warnings, durable JSONL audit sink | No bundled public exporter, rotation service, or distributed audit outbox |
+| SQL backends | SQLite, PostgreSQL, explicit MySQL syntax | Tested drivers/versions are recorded in audit v3; other dialects need a custom Store |
+| Redis Cluster | Per-primary scanning and routed single-key deletes | Best-effort under partitions/resharding; not instantaneous global revocation |
+| Documentation | English feature guide, corrected examples/claims, explicit persistence/lifecycle contracts | Keep versioned audit evidence and current guidance aligned |
+| Verification | Race suites, live DB/cluster integration, security scans, concurrency workloads, benchmarks | Results are dated workload-specific evidence, not universal guarantees |
+| Compatibility/security | Patched Go 1.27.2 toolchain and x/net v0.60.0 family | User approved Go 1.26 minimum for Fiber/Gin/examples; core/http/echo retain 1.25.7 |
 
-## 2. Current state vs target
+## Deliberate integration boundaries
 
-| Area | Current state | Target (PRD/plan) | Gap |
-| --- | --- | --- | --- |
-| Core engine | **Done** (root package `rbacgo`) | Model, enforcer, hierarchy + cycle detection | ✅ Complete |
-| Storage | **Done** | `Store` interface, SQL store (**default embedded SQLite**), LRU (memory/Redis) | ✅ Complete |
-| Config (`WithConfigFromEnv`) | **Done** | Env config with default prefix `RBAC_` (FR-9, ADR-009) | ✅ Complete |
-| `http` adapter | **Done** | stdlib middleware (serves Chi) | ✅ Complete |
-| `fiber` adapter | **Done** | Fiber v3 middleware | ✅ Complete |
-| `echo` adapter | **Done** | Echo v5 middleware | ✅ Complete |
-| `gin` adapter | **Done** | Gin v1 middleware | ✅ Complete |
-| Multi-module layout | **Done** | Root `go.mod` + per-adapter `go.mod` | ✅ Complete |
-| Examples | **Done** (`examples/`) | Runnable examples per adapter | ✅ Complete |
-| Tests | **Done** | ≥ 80% core coverage (83.9%), adapter suites (100%), Postgres integration test, benchmarks (147 ns/op cache hit) | ✅ Complete |
-| Docs | **Done** | README, THIRD_PARTY_NOTICES, LICENSE, godoc, install snippets | ✅ Complete |
-| CI | **Done** | `.github/workflows/ci.yml`: build/vet/race per module, Postgres integration, `govulncheck`, compliance (LICENSE + notices + direct-deps freshness) | ✅ Complete |
-| Version verification | **Done** | Fiber v3.4, Echo v5.3, Gin v1.12; published `v0.1.0-1` + per-adapter tags | ✅ Complete |
-| Release tags | **Done** | `v0.1.0-1`, `http/v0.1.0-1`, `fiber/v0.1.0-1`, `echo/v0.1.0-1`, `gin/v0.1.0-1` (verified end-to-end) | ✅ Complete |
+The requested audit feature backlog has implementations. Administration UI,
+per-field database authorization, policy scripting, database change watching,
+distributed atomic decision snapshots, tamper-proof logs, and transactional
+audit outboxes were not part of that feature-completion list and are not
+promised by these APIs. Exact boundaries and operational failure semantics are
+specified in limitation.md and the feature guide.
 
-## 3. Priority order
-
-All P0–P4 items are complete and the first pre-release (`v0.1.0-1`) is published. Remaining
-follow-ups:
-
-1. **Stable release** — tag `v0.1.0` (drop `-1`) once the pre-release is validated; no code
-   changes expected.
-2. **Re-verify** — adapter versions + licenses before each release (`go list -m -u`,
-   `govulncheck`, Dependabot/Renovate).
-
-## 4. Things that block progress
-
-- None at this time. Framework versions to target are already verified and the first
-  pre-release (`v0.1.0-1`) is published.
-- Future blocker to watch: Echo v5 and Fiber v3 are relatively new majors; their APIs may
-  shift within 2026. Re-verify pinned adapter versions before tagging.
-
-## 5. Anti-goals (intentionally out of scope)
-
-- ABAC / attribute-based policies.
-- Administration UI.
-- Per-field authorization.
-- An aggregator package that re-exports all adapters.
-- Wildcard permissions (v2) — design agreed (ADR-024): exact → `resource:*` → `*:action`
-  → `*:*`; `*:*` = superadmin role.
-- Role metadata (`Metadata map[string]string`) — ADR-024.
+Publishing a release, tagging, committing, and pushing require a separate
+explicit user request under AGENTS.md. No release-readiness guarantee follows
+from the completion of this implementation work.

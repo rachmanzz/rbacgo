@@ -1,0 +1,13 @@
+goos: linux
+goarch: amd64
+pkg: github.com/rachmanzz/rbacgo
+cpu: 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz
+BenchmarkCacheHit-8               	 9465080	       125.0 ns/op	      16 B/op	       1 allocs/op
+BenchmarkDefaultCacheHit-8        	 9910899	       121.3 ns/op	      16 B/op	       1 allocs/op
+BenchmarkNoCacheMiss-8            	 2499559	       478.0 ns/op	     576 B/op	       7 allocs/op
+BenchmarkOwnedCacheHit-8          	 5415330	       196.6 ns/op	      16 B/op	       1 allocs/op
+BenchmarkAttributeDecision-8      	  205230	      6121 ns/op	    2534 B/op	      58 allocs/op
+BenchmarkDurableAuditDecision-8   	  578589	      2044 ns/op	     644 B/op	       5 allocs/op
+BenchmarkEnforceParallel-8        	 7824572	       153.4 ns/op	      16 B/op	       1 allocs/op
+PASS
+ok  	github.com/rachmanzz/rbacgo	9.507s

@@ -4,7 +4,9 @@
 - **Purpose:** Document every third-party library used by rbacgo, with its purpose, the
   pinned version, and its license — and to enforce that all dependencies stay on the
   **latest** version and are **MIT-compatible**.
-- **Versions verified online:** 2026-08-02
+- **Last recorded online verification:** 2026-08-02 (historical, not a current freshness guarantee)
+- **Inventory synchronized with module manifests:** 2026-10-16
+- **New driver license checked:** go-mysql-org/go-mysql v1.16.0, MIT plus bundled BSD-3-Clause notice; official repository and downloaded module LICENSE
 - **Policy owner:** maintainers; re-verify before each release.
 
 ---
@@ -34,34 +36,36 @@
 
 | Library | Module | Purpose | Version | License | MIT-compatible |
 | --- | --- | --- | --- | --- | --- |
-| go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.49 | MIT | ✅ |
-| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.21.0 | BSD-2-Clause | ✅ |
-| miniredis | `github.com/alicebob/miniredis/v2` | In-process Redis for tests (test-only) | v2.38.0 | MIT | ✅ |
-| pgx | `github.com/jackc/pgx/v5` | PostgreSQL driver for the **integration test** (`//go:build integration`, test-only) | v5.10.0 | MIT | ✅ |
+| go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.52 | MIT | ✅ |
+| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.22.0 | BSD-2-Clause | ✅ |
+| miniredis | `github.com/alicebob/miniredis/v2` | In-process Redis for tests (test-only) | v2.39.0 | MIT | ✅ |
+| pgx | `github.com/jackc/pgx/v5` | PostgreSQL driver for the **integration test** (`//go:build integration`, test-only) | v5.11.0 | MIT | ✅ |
 
 ### Storage (recommended drivers, in the root module)
 
 > **Pluggable design:** the SQL store accepts a user-supplied `*sql.DB`. The drivers below
-> are the recommended ones, but users may bring their own `database/sql` driver/pool
-> (e.g. `pgxpool` via the pgx `stdlib` adapter). See ADR-005.
+> target the supported PostgreSQL and SQLite dialects. Other drivers for
+> these dialects require application verification; other dialects are not
+> supported. A pgxpool can be adapted through pgx stdlib. See ADR-005.
 
 | Library | Module | Purpose | Version | License | MIT-compatible |
 | --- | --- | --- | --- | --- | --- |
-| pgx | `github.com/jackc/pgx/v5` | PostgreSQL driver + toolkit (recommended for SQL store; incl. `pgxpool` + `stdlib` adapter) | v5.10.0 | MIT | ✅ |
-| go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.49 | MIT | ✅ |
-| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.21.0 | BSD-2-Clause | ✅ |
+| pgx | `github.com/jackc/pgx/v5` | PostgreSQL driver + toolkit (recommended for SQL store; incl. `pgxpool` + `stdlib` adapter) | v5.11.0 | MIT | ✅ |
+| go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.52 | MIT | ✅ |
+| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.22.0 | BSD-2-Clause | ✅ |
 | *(in-house)* | — | LRU cache implementation (cache layer) — implemented internally, **zero deps** (see §5) | — | MIT | ✅ |
 
 ### Adapters (each is its own module)
 
 | Library | Module | Purpose | Version | License | MIT-compatible |
 | --- | --- | --- | --- | --- | --- |
-| Fiber | `github.com/gofiber/fiber/v3` | Fiber v3 adapter | v3.4.0 | MIT | ✅ |
+| Fiber | `github.com/gofiber/fiber/v3` | Fiber v3 adapter | v3.5.0 | MIT | ✅ |
 | Echo | `github.com/labstack/echo/v5` | Echo v5 adapter | v5.3.1 | MIT | ✅ |
 | Gin | `github.com/gin-gonic/gin` | Gin v1 adapter | v1.12.0 | MIT | ✅ |
-| fasthttp (transitive, via Fiber) | `github.com/valyala/fasthttp` | Fiber's HTTP engine | v1.72.0 | MIT | ✅ |
+| fasthttp (transitive, via Fiber) | `github.com/valyala/fasthttp` | Fiber's HTTP engine | v1.73.0 | MIT | ✅ |
 
-The `http` adapter depends on **stdlib only** — zero third-party dependencies.
+The `http` adapter adds no framework dependency beyond the core module. The
+core module still brings its SQLite and Redis backend dependencies.
 
 ---
 
@@ -92,8 +96,10 @@ The `http` adapter depends on **stdlib only** — zero third-party dependencies.
 
 No MPL-2.0 dependencies remain in the project. Historical decisions:
 
-- **go-sql-driver/mysql (MPL-2.0)** — **removed (2026-08-02).** MySQL support is
-  **not** part of the SQL store; only PostgreSQL and SQLite (both MIT) are supported.
+- **go-sql-driver/mysql (MPL-2.0)** remains excluded. MySQL syntax is now
+  supported through an explicit dialect option. The isolated integration/mysql
+  module uses go-mysql-org/go-mysql v1.16.0 (MIT, with its bundled BSD notice);
+  the core module adds no MySQL driver dependency.
 - **hashicorp/golang-lru (MPL-2.0)** — **rejected as a dependency.** The LRU cache is
   implemented **in-house** (small, fixed-capacity, TTL-aware), keeping the cache layer
   MIT-only and the core engine dependency-free.
@@ -113,10 +119,24 @@ when redistributing binaries:
 
 ## 7. Known follow-ups
 
-- [x] Decide MySQL driver status — **removed; PostgreSQL + SQLite only** (2026-08-02).
+- [x] MySQL integration driver — isolated permissively licensed module;
+  go-sql-driver/mysql remains excluded (updated 2026-10-16).
 - [x] Decide LRU implementation: **in-house LRU** (MIT, zero-dep) chosen.
 - [x] Add `THIRD_PARTY_NOTICES` generation step to CI/release. — **Done (2026-08-02):**
   `THIRD_PARTY_NOTICES` added at repo root with the required MIT/BSD notices; `.github/workflows/ci.yml`
   verifies `LICENSE` + `THIRD_PARTY_NOTICES` presence and the required notices on every push/PR.
 - [x] Postgres dialect validated against a real server. — **Done (2026-08-02):** `sqlstore_postgres_test.go`
   (`//go:build integration`) runs against PostgreSQL 17 and is part of CI via a service container.
+
+## Feature completion dependency/security notes (2026-10-16)
+
+- The core adds no runtime dependency for policies, metadata, batches, metrics,
+  file audit, or bounded registries; these use standard-library facilities.
+- integration/mysql directly requires github.com/go-mysql-org/go-mysql v1.16.0.
+  Its MIT LICENSE and bundled Vitess BSD-3-Clause notice are included in
+  THIRD_PARTY_NOTICES. See https://github.com/go-mysql-org/go-mysql/tree/v1.16.0.
+- The user approved minimum Go 1.26.0 for Fiber/Gin/examples to install
+  golang.org/x/net v0.60.0 and its dependency family. Core/http/echo retain
+  minimum 1.25.7. Recommended/CI toolchain is go1.27.2 following the security scan.
+- An up-to-date inventory is not proof of global dependency freshness or absence
+  of vulnerabilities. See audit v3 for dated symbol-level scan results.

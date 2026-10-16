@@ -3,9 +3,12 @@
 - **Status:** Draft
 - **Module path:** `github.com/rachmanzz/rbacgo`
 - **Reference:** `PRD.md`
-- **Last updated:** 2026-08-02
+- **Last updated:** 2026-10-16
 
 ---
+
+> Milestone and audit sections below retain historical implementation evidence.
+> README.md and gap.md describe the current API and remaining gaps.
 
 ## 1. Scope
 
@@ -42,9 +45,9 @@ rbacgo/
 - `Store` interface; SQL store implementation (PostgreSQL- and SQLite-compatible schema).
   The SQL store is **pluggable at the driver/pool level**: it takes a user-supplied
   `*sql.DB`, so users bring their own driver/pool (pgx5, pgxpool via the pgx `stdlib`
-  adapter, go-sqlite3, or any `database/sql` implementation).
+  adapter, or go-sqlite3). Only PostgreSQL and SQLite dialects are supported.
 - **Default store: embedded SQLite** — `:memory:` by default, file path for persistence
-  (`WithSQLite(path)`), zero-config `rbacgo.New()`.
+  (`WithSQLite(path)`); WithTenant remains required.
 - Config from environment: `WithConfigFromEnv()` reads `RBAC_*` vars (prefix configurable
   via `WithEnvPrefix`) — store, SQLite path, cache, Redis settings (FR-9, ADR-009).
 - In-memory cache; concurrency-safe engine.
@@ -270,3 +273,13 @@ be consistent across instances, so it lives in shared storage:
 - Role metadata (`Metadata map[string]string` on `Role`) — ADR-024.
 - ABAC policies (post-v1).
 - Auto-reload of policies from SQL (post-v1).
+
+## Feature completion after audit v2 (2026-10-16)
+
+The user authorized completing the previously deferred feature opportunities.
+Implementation now includes bounded/leased tenant lifecycle, policy rules,
+metadata, atomic batches, metrics, durable audit, explicit MySQL, and Redis
+Cluster flushing. Contracts and operational limits are in docs/feature-guide.md;
+verification evidence is tracked by .knowledges/audit/feature-audit_v3.md.
+The Go 1.26 minimum for Fiber/Gin/examples was separately approved to install
+patched x/net; core/http/echo retain their 1.25.7 module minimum.

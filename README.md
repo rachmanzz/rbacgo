@@ -14,15 +14,23 @@ each one wraps the same core engine and storage.
   dependencies); the module ships optional SQLite and Redis backends.
 - **Role hierarchy** — a role can inherit from parent roles; effective
   permissions are the union of all ancestors. Cycles are detected and rejected.
-- **Pluggable storage** — SQL store (PostgreSQL / SQLite / any `database/sql`
-  driver, pluggable at the pool level) and an in-memory store.
-- **Default store: embedded SQLite** — `rbacgo.New()` works out of the box
-  (`:memory:`), or point it at a file for persistence.
-- **LRU cache layer** — in-memory and Redis backends with TTL and eviction.
+- **Pluggable storage** — PostgreSQL, SQLite, explicit MySQL syntax through a
+  caller-owned `*sql.DB`, plus an in-memory store.
+- **Default store: embedded SQLite** — `rbacgo.New(rbacgo.WithTenant("acme"))` uses
+  `:memory:` storage; pass a file path for persistence.
+- **Lookup cache** — a bounded in-memory LRU with TTL, or Redis with TTL
+  and server-configured eviction. Redis is not a client-side bounded LRU.
 - **Environment configuration** — `RBAC_`-prefixed env vars (configurable
   prefix), read once at construction.
 - **Consistent adapter API** — the same options and semantics across `http`,
   `fiber`, `echo`, and `gin` adapters.
+- **Optional policy extensions** — wildcard permissions, inherited allow/deny
+  rules, trusted attribute conditions, descriptive role metadata, and atomic batches.
+- **Operations** — bounded tenant registries with idle eviction/request leases,
+  metrics snapshots, operational logging, and a synchronous durable audit sink.
+
+See [Policy and Operations Guide](docs/feature-guide.md) for opt-in configuration,
+examples, persistence guarantees, and lifecycle behavior.
 
 ## Installation
 
@@ -30,30 +38,33 @@ Install only what you need:
 
 ```sh
 # core engine only
-go get github.com/rachmanzz/rbacgo@v0.1.0-1
+go get github.com/rachmanzz/rbacgo@v0.2.0-4
 
 # stdlib / net/http users (also Chi)
-go get github.com/rachmanzz/rbacgo/http@v0.1.0-1
+go get github.com/rachmanzz/rbacgo/http@v0.2.0-4
 
 # framework-specific
-go get github.com/rachmanzz/rbacgo/fiber@v0.1.0-1   # Fiber v3
-go get github.com/rachmanzz/rbacgo/echo@v0.1.0-1    # Echo v5
-go get github.com/rachmanzz/rbacgo/gin@v0.1.0-1     # Gin v1
+go get github.com/rachmanzz/rbacgo/fiber@v0.2.0-4   # Fiber v3
+go get github.com/rachmanzz/rbacgo/echo@v0.2.0-4    # Echo v5
+go get github.com/rachmanzz/rbacgo/gin@v0.2.0-4     # Gin v1
 ```
 
-> The first public release is the pre-release **`v0.1.0-1`**, so pin the version
-> explicitly (Go does not select pre-releases for `@latest`). Once a stable
-> `v0.1.x` is tagged, plain `go get github.com/rachmanzz/rbacgo/http` works too.
+> The commands above pin the existing pre-release tag **`v0.2.0-4`**.
+> Go does not select pre-releases for `@latest`. New APIs described below
+> (policy extensions, bounded registries, metrics/audit, and `*As` APIs) are working-tree additions
+> and require a subsequent release or a local module replacement.
 
 Each adapter is its own Go module with independent versioning
-(`http/v0.1.0-1`, `fiber/v0.1.0-1`, ...).
+(`http/v0.2.0-4`, `fiber/v0.2.0-4`, ...).
 
 ## Quick start
 
-Zero-config: `rbacgo.New()` uses an embedded SQLite store in memory. Every
+No database setup is required: `New(WithTenant("acme"))` uses embedded SQLite
+in memory. Calling `New()` without a tenant returns `ErrTenantRequired`. Every
 enforcer is scoped to a **tenant** (organization, workspace, app…) with
 `WithTenant`; roles, users, and cache entries are namespaced by it, so one
-shared store can serve many tenants without cross-tenant access.
+shared store can serve many tenant namespaces. Your application must validate
+that the authenticated caller may access the resolved tenant.
 
 ```go
 package main
@@ -74,16 +85,22 @@ func main() {
 	}
 
 	// Roles with hierarchy: editor inherits viewer's permissions.
-	enforcer.RegisterRole(ctx, rbacgo.Role{
+	if err := enforcer.RegisterRole(ctx, rbacgo.Role{
 		Name:        "viewer",
 		Permissions: []rbacgo.Permission{{Resource: "articles", Action: "read"}},
-	})
-	enforcer.RegisterRole(ctx, rbacgo.Role{
+	}); err != nil {
+		panic(err)
+	}
+	if err := enforcer.RegisterRole(ctx, rbacgo.Role{
 		Name:        "editor",
 		Permissions: []rbacgo.Permission{{Resource: "articles", Action: "write"}},
 		Parents:     []string{"viewer"},
-	})
-	enforcer.AssignRole(ctx, "user-123", "editor")
+	}); err != nil {
+		panic(err)
+	}
+	if err := enforcer.AssignRole(ctx, "user-123", "editor"); err != nil {
+		panic(err)
+	}
 
 	fmt.Println(enforcer.Enforce(ctx, "user-123", "articles", "read"))  // true  (inherited)
 	fmt.Println(enforcer.Enforce(ctx, "user-123", "articles", "write")) // true  (own)
@@ -143,9 +160,11 @@ your application uses to identify an organization, workspace, or project.
   acme.RegisterRole(ctx, rbacgo.Role{Name: "viewer", ...})
   globex.RegisterRole(ctx, rbacgo.Role{Name: "viewer", ...}) // same name, no clash
   ```
-* Roles and assignments belong to the tenant's admin/owner: tenant A can
-  never read, assign, unassign, or delete tenant B's roles even on a shared
-  store — isolation is enforced by the library, not by calling convention.
+* Enforcer operations use tenant-scoped keys even on shared storage. This
+  isolates tenant namespaces; it does not authenticate callers or establish
+  tenant membership. Resolve tenants from trusted authentication data and
+  authorize access before selecting an Enforcer. Direct use of `Store()`
+  bypasses the Enforcer's namespace and authorization checks.
 * `TenantID()` returns the tenant of an enforcer.
 * For 100+ isolated organizations prefer **one Enforcer per tenant** (memory
   store or SQLite file each), or a shared SQL database with a table prefix
@@ -162,9 +181,10 @@ checking permissions. Two rules keep the hierarchy acyclic:
    links but never renames; the role name is the identity, so parents always
    reference stable names.
 
-Together these make cycles *structurally impossible* through the public API. The
-engine still ships a defensive cycle check (`detectCycle` in `memory_store.go` /
-`checkCycles` in `sqlstore.go`) that guards the stores against direct manipulation.
+An update can introduce a cycle even when every parent already exists. The
+shipped stores validate the proposed graph and reject cyclic registrations or
+updates with `ErrCycleDetected` (`detectCycle` in `memory_store.go` /
+`checkCycles` in `sqlstore.go`). Custom stores must enforce the same invariant.
 
 ```go
 if err := enforcer.RegisterRole(ctx, rbacgo.Role{Name: "viewer"}); err != nil {
@@ -176,26 +196,40 @@ err := enforcer.RegisterRole(ctx, rbacgo.Role{Name: "admin", Parents: []string{"
 
 ## Role management
 
-Roles can be updated, deleted, unassigned from users, and enumerated. Because
-mutations are privileged, they require the caller to hold a
-**role-management capability**: the permission `("roles", "manage")` by
-default (override with `WithRoleManagementPermission("acl", "manage")`). A
-caller without the capability gets `ErrPermissionDenied`.
+Role-management APIs have two explicit authorization boundaries. Capability-
+checked methods require the actor to hold `("roles", "manage")` in this tenant
+(override with `WithRoleManagementPermission("acl", "manage")`). A caller
+without that capability gets `ErrPermissionDenied`.
+
+| Operation | Capability-checked API | Trusted provisioning API (no caller check) |
+| --- | --- | --- |
+| Register a role | `RegisterRoleAs(ctx, actorID, role)` | `RegisterRole(ctx, role)` |
+| Register a batch | `RegisterRolesAs(ctx, actorID, roles...)` | `RegisterRoles(ctx, roles...)` |
+| Assign a role | `AssignRoleAs(ctx, actorID, targetUserID, roleName)` | `AssignRole(ctx, userID, roleName)` |
+| List roles | `ListRolesAs(ctx, actorID)` | `ListRoles(ctx)` |
+| Update / delete / unassign | `UpdateRole` / `DeleteRole` / `UnassignRole` | None |
+
+Use the trusted APIs only in provisioning code or behind application-level
+administrative authorization. Bootstrap the first manager with `RegisterRole`
+and `AssignRole`, then use the checked methods for user-facing administration.
+Derive `actorID` from the authenticated session, never from an untrusted body
+field. Batch registration is ordered, not atomic: earlier successes remain
+committed when a later role fails.
 
 ```go
 // Only callers holding ("roles", "manage") may run these.
-err := enforcer.UpdateRole(ctx, "admin-user", Role{
+err := enforcer.UpdateRole(ctx, "admin-user", rbacgo.Role{
 	Name:        "editor",
-	Permissions: []Permission{{Resource: "/articles", Action: "DELETE"}},
+	Permissions: []rbacgo.Permission{{Resource: "/articles", Action: "DELETE"}},
 	Parents:     []string{"viewer"},
 })
 // ErrParentNotFound   -> a parent does not exist
 // ErrCycleDetected    -> the new parents would close a hierarchy cycle
 // ErrPermissionDenied -> caller lacks the role-management capability
 
-roles, err := enforcer.ListRoles(ctx) // all roles of this tenant, sorted
+roles, err := enforcer.ListRolesAs(ctx, "admin-user") // tenant-scoped, sorted
 
-err := enforcer.DeleteRole(ctx, "admin-user", "editor")
+err = enforcer.DeleteRole(ctx, "admin-user", "editor")
 // ErrRoleInUse  -> editor is still assigned to at least one user
 // ErrPermissionDenied -> caller lacks the role-management capability
 
@@ -217,11 +251,11 @@ Rules:
    (`ErrRoleInUse`). Unassign it first.
 3. **Deleting a parent cascades** — child roles automatically lose the deleted
    role from their parent list; their own permissions and assignments remain.
-4. **Cache invalidation** — successful mutations flush the whole lookup cache;
-   unassignments drop the target user's cache entry immediately. With
-   `WithCacheInvalidator`, the same events are published so **every** process
-   sharing the store (and the Redis pub/sub channel) evicts immediately,
-   instead of waiting for TTL expiry.
+4. **Cache invalidation** — role register/update/delete flushes the local lookup
+   cache; assignment/unassignment drops the target user's entry. With
+   `WithCacheInvalidator`, events are published to other subscribers. Delivery
+   is asynchronous and best-effort; lost events leave remote caches stale
+   until TTL expiry or a later invalidation. This is not instantaneous revocation.
 5. **Store support** — `UpdateRole`/`DeleteRole`/`UnassignRole`/`ListRoles` are
    optional store capabilities (`RoleUpdater`/`RoleDeleter`/`RoleUnassigner`/
    `RoleLister` interfaces). Stores that do not implement them report
@@ -233,7 +267,7 @@ Rules:
 
 The library is framework-agnostic, so it returns a ready-to-serialize snapshot
 instead of writing HTTP responses. `Enforcer.PermissionView` builds the
-effective access rights of a user — directly assigned roles plus the
+ordinary RBAC allow snapshot of a user — directly assigned roles plus the
 deduplicated permission set (own + inherited, sorted) — for a
 `GET /api/v1/me/permissions` endpoint:
 
@@ -255,10 +289,15 @@ json.NewEncoder(w).Encode(view) // in real apps: never return raw errors
 }
 ```
 
+Conditional policies/denies are not applied to this snapshot; use backend
+enforcement for each resource context.
+
 `policy_version` increments on every successful policy mutation (role
-registration, assignment, unassignment, deletion). Frontends store the version
+registration, update, assignment, unassignment, deletion), subject to shared
+source availability. Frontends store the version
 next to the payload and re-render only when it changes — no payload diffing
-needed, and multi-tab sessions detect stale access rights automatically:
+needed. Each tab must fetch a fresh snapshot to detect changes; the version
+is not a push notification mechanism:
 
 ```js
 if (payload.policy_version !== lastVersion) {
@@ -268,8 +307,7 @@ if (payload.policy_version !== lastVersion) {
 ```
 
 By default the version is held in memory per instance. In multi-instance
-deployments the counter is shared instead, so every instance reports the same
-value for the same policy state:
+deployments use a shared source to align versions across instances:
 
 - **SQL** — the source of truth: `sqlStore` keeps the counter in a `meta`
   table, so all instances on the same database agree automatically; no extra
@@ -280,13 +318,16 @@ value for the same policy state:
 ```go
 version := rbacgo.NewRedisPolicyVersion(redisClient, "rbacgo:policy_version")
 enforcer, err := rbacgo.New(
+	rbacgo.WithTenant("acme"),
 	rbacgo.WithStore(store),
 	rbacgo.WithPolicyVersionStore(version),
 )
 ```
 
 If the shared source is unreachable the enforcer falls back to its local
-counter; version bookkeeping never fails a policy mutation.
+counter; version bookkeeping never fails a policy mutation. During an outage,
+versions can diverge or move backward when the shared source recovers. A version
+is an invalidation hint, not an atomic revision binding roles and permissions.
 
 The frontend may use this payload to render menus, hide buttons, and guard
 routes — but the backend must still call `Enforce` on every protected action;
@@ -307,7 +348,7 @@ The single-tenant middlewares gate every request with one fixed Enforcer. For
 multi-tenant deployments (the documented pattern of one Enforcer per tenant
 sharing one store), every adapter also ships a **per-tenant variant**: a
 `TenantRegistry` lazily creates and caches one Enforcer per tenant (the
-factory runs at most once per tenant, even under concurrent first requests),
+factory runs at most once per cached entry, even under concurrent first requests),
 and the middleware resolves the tenant from each request, fetches its
 Enforcer, stores both in the request context, and enforces with the tenant's
 Enforcer:
@@ -335,22 +376,24 @@ tenantID, _ := httpadapter.TenantFromContext(r.Context())
 enf, _ := httpadapter.EnforcerFromContext(r.Context())
 ```
 
-Tenant option names mirror the single-tenant ones with a `Tenant` prefix
-(`WithTenantResolver`, `WithTenantUserID`, `WithTenantResourceAction`,
-`WithTenantUnauthorizedHandler`, `WithTenantDeniedHandler`,
-`WithTenantEnforcerErrorHandler`). The factory is the provisioning point: it
-runs under a per-tenant `sync.Once`, so a tenant is created exactly once even
-under concurrent load; `registry.Clear()` forgets all cached Enforcers so the next request
-re-provisions a tenant (e.g. after redeploying role definitions).
-`NewTenantRegistry` panics on a nil factory, as the middlewares panic on
-missing required options. The net/http variant is built with `NewTenant`;
-gin/fiber/echo expose the same middleware as `TenantMiddleware`. Context
-helpers are `TenantFromContext`/`EnforcerFromContext` in every adapter
-(fiber: read from `c.Context()`; gin/echo: from `c.Request().Context()`).
+Tenant options mirror single-tenant options with a Tenant prefix. All adapters
+share the core TenantRegistry. The original factory constructor remains; use
+NewTenantRegistryWithOptions or NewTenantRegistryContext for optional capacity,
+idle TTL, and factory timeouts. Middleware holds a registry lease until the
+handler returns, so eviction/shutdown can drain active requests.
 
-Response semantics: a missing or empty tenant is unauthenticated (401, same
-as a missing user); a factory error is a server error (500, overridable with
-`WithTenantEnforcerErrorHandler`); a tenant-scoped denial is 403.
+EvictContext removes one entry and waits for its leases/factory. ClearAndClose
+cleans a snapshot and remains reusable; Shutdown permanently rejects new leases
+and stops the idle janitor. Clear preserves its older forget-only behavior.
+Context-aware cleanup can return on a deadline while cleanup continues. A
+factory must cooperate with cancellation; cached failures can be evicted to
+retry. See the [lifecycle guide](docs/feature-guide.md#bounded-registries-and-graceful-shutdown)
+for ownership, deadlines, and deadlock boundaries.
+
+Missing/empty tenants or users return 401; factory/capacity/shutdown errors use
+WithTenantEnforcerErrorHandler (500 by default); a denial is 403. Tenant/user
+resolvers must use trusted authentication data. Arbitrary client-supplied tenant
+headers do not establish tenant membership.
 
 ### net/http (also Chi)
 
@@ -415,10 +458,18 @@ override them with `WithUnauthorizedHandler` / `WithDeniedHandler`.
 
 ### SQL store (primary)
 
-The SQL store is pluggable at the **driver/pool** level: pass any existing
-`*sql.DB` you own, using whatever driver you like — `pgx`/`pgxpool` (via the
-pgx `stdlib` adapter) for PostgreSQL, `go-sqlite3` for SQLite, or anything else
-implementing `database/sql`.
+The SQL store accepts a caller-owned `*sql.DB`. Supported dialects are
+**PostgreSQL, SQLite, and explicit MySQL**. The repository tests SQLite through
+`go-sqlite3`, PostgreSQL through `pgx`/`stdlib`, and MySQL through a separate
+`go-mysql-org/go-mysql` test module. Other drivers require application verification. Accepting `database/sql` does not
+provide support for other SQL dialects. Use a custom `Store` for those.
+
+| Backend | Driver tested in this repository | Verification |
+| --- | --- | --- |
+| SQLite | `github.com/mattn/go-sqlite3` | Root tests |
+| PostgreSQL | `github.com/jackc/pgx/v5/stdlib` | Integration-tagged tests in CI |
+| MySQL (explicit dialect) | `github.com/go-mysql-org/go-mysql/driver` | Separate `integration/mysql` suite |
+| Other SQL dialects | None | Use a custom Store |
 
 ```go
 import (
@@ -429,7 +480,7 @@ import (
 )
 
 db, _ := sql.Open("pgx", "postgres://user:pass@localhost/db")
-enforcer, err := rbacgo.New(rbacgo.WithSQLStore(db))
+enforcer, err := rbacgo.New(rbacgo.WithTenant("acme"), rbacgo.WithSQLStore(db))
 ```
 
 **Table prefix for shared databases** — when multiple applications or tenants
@@ -437,9 +488,9 @@ share one database, namespace the tables with `WithTablePrefix` so they do not
 collide:
 
 ```go
-enforcer, err := rbacgo.New(rbacgo.WithSQLStore(db, rbacgo.WithTablePrefix("myapp_")))
+enforcer, err := rbacgo.New(rbacgo.WithTenant("acme"), rbacgo.WithSQLStore(db, rbacgo.WithTablePrefix("myapp_")))
 // tables: myapp_roles, myapp_role_permissions, myapp_role_parents,
-//         myapp_role_assignments, myapp_meta
+//         myapp_role_assignments, myapp_meta, myapp_role_rules, myapp_role_metadata
 ```
 
 The prefix must be a safe identifier fragment (letters, digits, underscore;
@@ -453,19 +504,19 @@ never touches it.
 ### Embedded SQLite (default)
 
 ```go
-enforcer, err := rbacgo.New()                          // :memory: — zero setup
-enforcer, err := rbacgo.New(rbacgo.WithSQLite("data/rbac.db")) // file persistence
+enforcer, err := rbacgo.New(rbacgo.WithTenant("acme")) // :memory:
+enforcer, err := rbacgo.New(rbacgo.WithTenant("acme"), rbacgo.WithSQLite("data/rbac.db")) // file persistence
 ```
 
 ### In-memory store
 
 ```go
-enforcer, err := rbacgo.New(rbacgo.WithMemoryStore())
+enforcer, err := rbacgo.New(rbacgo.WithTenant("acme"), rbacgo.WithMemoryStore())
 ```
 
 ## Cache layer
 
-Cache effective permission sets per user with an LRU and optional TTL. The
+Cache effective permission sets per user with the in-memory LRU or Redis TTL backend. The
 cache is invalidated automatically on role/permission/assignment changes.
 
 ```go
@@ -473,40 +524,49 @@ import "github.com/rachmanzz/rbacgo"
 
 // In-memory LRU
 enforcer, err := rbacgo.New(
+	rbacgo.WithTenant("acme"),
 	rbacgo.WithMemoryStore(),
 	rbacgo.WithLRU(rbacgo.NewMemoryLRU(capacity, ttl)),
 )
 
-// Redis-backed LRU
+// Redis-backed TTL cache
 import "github.com/redis/go-redis/v9"
 rb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 enforcer, err := rbacgo.New(
+	rbacgo.WithTenant("acme"),
 	rbacgo.WithMemoryStore(),
 	rbacgo.WithLRU(rbacgo.NewRedisLRU(rb, "rbac:", 5*time.Minute)),
 )
 ```
 
 > **Cross-instance invalidation.** When several application processes (or
-> instances) share one RBAC store, each keeps its own LRU, and a mutation in one
-> process is only seen by the others when their cache entries expire (TTL).
+> instances) share one RBAC store, separate local caches retain snapshots until
+> they expire (TTL) unless invalidation is delivered. Sharing a Redis cache
+> backend also shares cache entries; independent memory stores still do not
+> share policy data.
 > Wire them together with `WithCacheInvalidator` and a Redis pub/sub channel so
-> every mutation (role register/update/delete, assignment/unassignment) evicts
-> the affected snapshots in **all** processes immediately:
+> received mutation events evict affected snapshots on subscribers without
+> waiting for their TTL. Delivery is asynchronous and best-effort:
 >
 > ```go
 > rb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 > invalidator := rbacgo.NewRedisInvalidator(rb, "rbacgo:invalidation")
 > enforcer, err := rbacgo.New(
+> 	rbacgo.WithTenant("acme"),
 > 	rbacgo.WithMemoryStore(),
 > 	rbacgo.WithCacheInvalidator(invalidator),
 > )
 > ```
 >
-> Events are **best-effort**: a publish or delivery failure is logged and
-> skipped, never failing the mutation — coherence degrades back to TTL-bounded
-> instead. The Redis client given to `NewRedisInvalidator` is shared, not
+> Events are **best-effort**: publish failures are logged only when
+> `WithLogger` is configured, and never fail the mutation. Delivery failures
+> are not exposed by `CacheInvalidator`; coherence can degrade to TTL-bounded
+> behavior. The Redis client given to `NewRedisInvalidator` is shared, not
 > closed by the enforcer; only a client created internally via
 > `WithConfigFromEnv` (`RBAC_CACHE=redis`) is owned and closed by `Close()`.
+> Close caller-owned invalidators and Redis clients separately after their
+> Enforcers have stopped using them. Both Enforcers must share persistent
+> policy storage; independent memory stores do not share policy data.
 >
 > > **Attention — LRU capacity & TTL.** The in-memory LRU implementation
 > (`memoryLRU`, see [`cache.go`](cache.go), especially `NewMemoryLRU` and the
@@ -518,56 +578,59 @@ enforcer, err := rbacgo.New(
 > that memory usage does not balloon. When memory is a hard constraint, prefer
 > the Redis backend or set `RBAC_CACHE=none`.
 
-> **Redis prefix uniqueness.** Every application (or tenant) that shares one
+> **Redis prefix uniqueness.** Every independent policy dataset sharing one
 > Redis instance **must use its own unique cache prefix**
 > (`NewRedisLRU(..., "myapp:", ...)`). The default prefix is `rbacgo:cache:`
 > (also used by the `RBAC_CACHE=redis` env path); two applications using the
-> same prefix with overlapping user IDs would serve each other's cached
+> same prefix with overlapping tenant/user IDs would serve each other's cached
 > permission sets — a cross-application authorization leak.
 
-> **Redis Cluster note.** The Redis LRU cache clears entries with a `SCAN` +
-> `DEL` walk over the configured key prefix (used when a role is re-registered,
-> since the affected users cannot be enumerated cheaply). On Redis **Cluster**,
-> keys are sharded by hash slot, so a multi-key `DEL` for keys spread across
-> slots requires `CLUSTER SETSLOT` handling — the plain `DEL` call will return a
-> `CROSSSLOT` error and only single-key deletes are guaranteed. If you run a
-> Redis Cluster, prefer the standalone Redis backend for the cache, or accept
-> that invalidation may fall back to TTL expiry.
+> **Redis Cluster.** With a `*redis.ClusterClient`, FlushContext scans every
+> primary and routes single-key deletes to avoid CROSSSLOT. The integration test
+> covers three primaries. It is not an atomic snapshot during concurrent writes
+> or resharding; failures can leave entries until TTL expiry. See the
+> [cluster guide](docs/feature-guide.md#mysql-and-redis-cluster).
 
-> **Redis Cluster note.** The Redis LRU cache clears entries with a `SCAN` +
-> `DEL` walk over the configured key prefix (used when a role is re-registered,
-> since the affected users cannot be enumerated cheaply). On Redis **Cluster**,
-> keys are sharded by hash slot, so a multi-key `DEL` for keys spread across
-> slots requires `CLUSTER SETSLOT` handling — the plain `DEL` call will return a
-> `CROSSSLOT` error and only single-key deletes are guaranteed. If you run a
-> Redis Cluster, prefer the standalone Redis backend for the cache, or accept
-> that invalidation may fall back to TTL expiry.
+Custom `CacheBackend` implementations must be concurrency-safe. Implement
+`GenerationCacheBackend` as well when sharing a cache across Enforcers: its
+conditional writes prevent stale lookups from refilling invalidated entries.
+The supplied memory and Redis backends implement it. Without that interface,
+fill protection is limited to mutations observed by a single Enforcer.
 
 ## Performance
 
-Decisions hit the lookup cache by default, so the hot path is a single map
-read. Benchmarks (`go test -bench . -benchmem`) on Intel i7-8650U @ 1.90GHz,
-Go 1.25.12, 2026-08-06 — memory store, one role/user, same decision repeated:
+The default in-memory cache performs constant-time lookup and LRU bookkeeping
+on a warm hit, with locking and TTL checks. Misses rebuild permissions from
+the store; Redis hits include network I/O and JSON decoding. Measurements on
+Intel i7-1165G7 @ 2.80GHz, Linux amd64, Go 1.27.2, 2026-10-16,
+with eight logical workers:
 
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| `BenchmarkDefaultCacheHit` (plain `New()`) | 140 | 8 | 1 |
-| `BenchmarkCacheHit` (explicit `WithLRU`) | 145 | 8 | 1 |
-| `BenchmarkNoCacheMiss` (`RBAC_CACHE=none`) | 549 | 560 | 6 |
+| Default cache hit | 121.3 | 16 | 1 |
+| Explicit LRU hit | 125.0 | 16 | 1 |
+| Uncached rebuild | 478.0 | 576 | 7 |
+| Owned cache hit | 196.6 | 16 | 1 |
+| Attribute decision | 6,121 | 2,534 | 58 |
+| Audit decision (temporary tmpfs file) | 2,044 | 644 | 5 |
+| Parallel enforcement | 153.4 | 16 | 1 |
 
-The default cache is ~3.9x faster than the uncached rebuild path per decision.
-Cache misses fall back to building the effective permission set (O(R+M+P) over
-the role graph); enable the cache or size `RBAC_CACHE_CAPACITY` to your active
-user count to keep misses rare.
+The audit benchmark includes append/fsync on **tmpfs**, so it does not measure
+persistent-disk durability latency. These synthetic workloads are not deployment
+latency guarantees. See [audit v3](.knowledges/audit/feature-audit_v3.md) for
+verification details and raw measurements.
+Cache misses build the effective permission set by traversing ancestors; shared
+ancestors may be revisited. Size `RBAC_CACHE_CAPACITY` to the workload and
+measure hit rate and latency under representative concurrency.
 
 ## Environment configuration
 
-All store/cache settings are configurable via `RBAC_`-prefixed environment
+The settings listed below are configurable via `RBAC_`-prefixed environment
 variables (default prefix; override with `WithEnvPrefix("X_")`), read once at
 construction via `WithConfigFromEnv()`:
 
 ```go
-enforcer, err := rbacgo.New(rbacgo.WithConfigFromEnv())
+enforcer, err := rbacgo.New(rbacgo.WithTenant("acme"), rbacgo.WithConfigFromEnv())
 ```
 
 Precedence: explicit options (e.g. `WithMemoryStore()`, `WithLRU(...)`) win
@@ -587,7 +650,8 @@ export RBAC_REDIS_ADDR=localhost:6379
 | --- | --- | --- |
 | `RBAC_STORE` | `sqlite` | `sqlite`, `sql` (user-supplied `*sql.DB`), `memory` |
 | `RBAC_SQLITE_PATH` | `:memory:` | SQLite DSN / file path |
-| `RBAC_DATABASE_URL` | — | Postgres/other DSN passed to the configured driver |
+| `RBAC_DATABASE_URL` | — | PostgreSQL URL (pgx) or SQLite DSN for `STORE=sql` |
+| `RBAC_SQL_TABLE_PREFIX` | — | SQL table prefix for `STORE=sql` |
 | `RBAC_CACHE` | `memory` | `memory`, `redis`, `none` |
 | `RBAC_CACHE_CAPACITY` | `1024` | LRU capacity |
 | `RBAC_CACHE_TTL` | `5m` | Cache TTL (Go duration string) |
@@ -595,10 +659,10 @@ export RBAC_REDIS_ADDR=localhost:6379
 | `RBAC_REDIS_PASSWORD` | — | Redis password (optional) |
 | `RBAC_REDIS_DB` | `0` | Redis DB index |
 
-You do not need to set any of these to get started — `rbacgo.New()` works out of
-the box with an embedded `:memory:` SQLite store and an in-memory LRU lookup
-cache (1024 entries, 5m TTL), so every decision is an O(1) cache hit on
-average. Replace the backend with `WithLRU(...)` (e.g. a Redis LRU), or call
+No environment variables are required to start with `New(WithTenant("acme"))`.
+The defaults are embedded `:memory:` SQLite and an in-memory LRU lookup cache
+(1024 entries, 5m TTL). Cache misses and expiry still require store access.
+Replace the backend with `WithLRU(...)` (e.g. a Redis TTL cache), or call
 `WithConfigFromEnv()` to control it via env vars (`RBAC_CACHE=none` disables
 the cache entirely). Set the env vars above only for what you change; the
 [Validation checklist](#validation-checklist) points to the env vars relevant to
@@ -614,6 +678,7 @@ go run ./http    # stdlib / Chi
 go run ./fiber   # Fiber v3
 go run ./echo    # Echo v5
 go run ./gin     # Gin v1
+go run ./policy  # attributes, deny rules, atomic batch, metrics, durable audit
 ```
 
 Each seeds a `viewer` / `editor` hierarchy and answers requests on `:8080`.
@@ -623,16 +688,43 @@ from its own auth layer).
 
 ## Compatibility
 
-- **Go:** latest stable release.
-- **Core engine logic:** stdlib-only (zero third-party dependencies). The module's only
-  third-party deps are the optional backends: embedded SQLite (`go-sqlite3`) and Redis
-  cache (`go-redis`).
-- **Adapters:** Fiber **v3**, Echo **v5**, Gin **v1 latest**, `net/http`
-  (latest stdlib). Older majors are not supported.
+- **Go:** core, http, and echo retain minimum `go 1.25.7`.
+  The recommended/CI toolchain is `go1.27.2` for current security fixes.
+  Fiber, Gin, and examples require Go 1.26.0 after the approved x/net patch update.
+- **Core algorithms:** use standard-library data structures. The root module
+  still has runtime dependencies for SQLite (`go-sqlite3`) and Redis
+  (`go-redis`), even when an application selects the memory backend. Test
+  dependencies are listed separately in `third-party.md`.
+- **Adapters:** Fiber **v3**, Echo **v5**, Gin **v1**, `net/http`. The pinned
+  framework versions in each adapter's `go.mod` are tested; other versions
+  require verification. Older majors are not supported.
+
+## Operational logging
+
+`WithLogger` accepts a standard-library `*slog.Logger`. Logging is disabled
+by default. It emits warnings with `tenant` and `error` attributes for failed
+`EnforceCtx`/`EnforceOwnedCtx` permission lookups, invalidation publishes, and
+shared policy-version reads/increments that fall back to a local counter.
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)) // log/slog, os
+// Pass WithLogger when constructing your tenant's Enforcer.
+enforcer, err := rbacgo.New(
+    rbacgo.WithTenant("acme"),
+    rbacgo.WithLogger(logger),
+)
+```
+
+Handlers must support concurrent use. Logging is synchronous, so avoid blocking
+handlers on request paths. Best-effort bookkeeping failures still do not fail
+policy mutations. This feature is not a durable decision or policy-change audit
+trail and does not report every backend failure. For counters and durable events,
+configure `WithMetrics` and `WithAuditSink`; see the
+[observability guide](docs/feature-guide.md#metrics-and-durable-audit).
 
 ## Validation checklist
 
-> The defaults below are safe, but you **must validate** them against your own
+> Review the defaults and integration boundaries below against your own
 > deployment before going to production. Each item links to the relevant code
 > and the environment variables you may need.
 
@@ -680,23 +772,22 @@ from its own auth layer).
    client/UI expects them, and override with `WithUnauthorizedHandler` /
    `WithDeniedHandler` per adapter.
 
-## Known residual (security)
+## Security verification
 
-`govulncheck` is clean on all six modules except one advisory: **GO-2026-5932** on
-`golang.org/x/crypto/openpgp`. It is inherited transitively from Fiber v3 / Gin v1 and has
-**no published fix** (the advisory marks the package unsafe-by-design). It is **not called**
-by any rbacgo code path, so govulncheck reports it only informationally and still exits 0.
-CI runs govulncheck in default symbol mode (see `.github/workflows/ci.yml`); the residual
-is non-blocking there. Re-evaluate before every release — if a fix appears or the
-transitive dependency drops, remove this note.
+Go 1.27.2 and patched x/net dependencies are selected following the vulnerability
+scan. The resulting Go 1.26 minimum for Fiber/Gin/examples was explicitly approved.
+See [.knowledges/audit/feature-audit_v3.md](.knowledges/audit/feature-audit_v3.md)
+for dated scan/test evidence. Symbol-level scans do not prove that every possible
+application integration is safe; rerun them for each deployment and release.
 
-## Roadmap & non-goals
+## Scope and non-goals
 
-- v1: roles, hierarchy, SQL/SQLite/memory storage, LRU cache (memory + Redis),
-  `http`/`fiber`/`echo`/`gin` adapters.
-- Future: wildcard permissions, ABAC policies, auto-reload of policies.
-- Out of scope: administration UI, per-field (column-level) authorization, an
-  aggregator package that re-exports every adapter.
+The library provides RBAC plus opt-in wildcard matching, attribute conditions,
+and deny rules. Metadata and atomic policy batches are available through optional
+store capabilities. It does not provide an administration UI, per-field database
+authorization, an arbitrary policy scripting language, or an adapter aggregator.
+Database change watching, distributed atomic decision snapshots, and a
+transactional audit outbox are not promised. See limitation.md for exact boundaries.
 
 ## License
 

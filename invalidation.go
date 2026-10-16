@@ -217,8 +217,8 @@ func (r *redisInvalidator) Close() error {
 
 // WithCacheInvalidator enables cross-instance cache invalidation. After a
 // successful mutation this Enforcer publishes an InvalidationEvent; every
-// Enforcer sharing the invalidator then drops or flushes its lookup cache
-// immediately instead of waiting for TTL expiry. Requires a lookup cache
+// Enforcer receiving an event drops or flushes its lookup cache. Delivery is
+// asynchronous and best-effort; missed events fall back to TTL expiry. Requires a lookup cache
 // (WithLRU or the default) to receive events; without one the Enforcer
 // still publishes its mutations. See NewRedisInvalidator for the Redis
 // pub/sub backend, and Enforcer.Close to stop a subscriber cleanly.

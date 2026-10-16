@@ -3,8 +3,8 @@
 - **Status:** Draft
 - **Author:** rbacgo team
 - **Module path:** `github.com/rachmanzz/rbacgo`
-- **Go version:** latest stable (2026)
-- **Last updated:** 2026-08-02
+- **Go version:** core/http/echo minimum 1.25.7; Fiber/Gin/examples minimum 1.26.0; toolchain 1.27.2
+- **Last updated:** 2026-10-16
 
 ---
 
@@ -31,9 +31,9 @@ core engine and storage.
 - Support role **hierarchy** (parent/child inheritance) with cycle detection.
 - Ship standalone adapters for:
   - **`http`** — standard library `net/http` middleware (latest Go release, also serves Chi users).
-  - **fiber** — Fiber v3 only (currently v3.4.x).
-  - **echo** — Echo v5 only (currently v5.3.x).
-  - **gin** — Gin v1 latest (currently v1.12.x).
+  - **fiber** — Fiber v3 only (see fiber/go.mod for the tested version).
+  - **echo** — Echo v5 only (see echo/go.mod for the tested version).
+  - **gin** — Gin v1 (see gin/go.mod for the tested version).
 - Older framework versions (e.g. Fiber v2, Echo v4) are **not** supported; users must
   upgrade to the listed majors to use the adapters.
 - Allow **per-framework installation** so users pull only the packages they need.
@@ -43,12 +43,12 @@ core engine and storage.
 - Return customizable 401/403 responses from middleware.
 
 ### Non-Goals
-- ABAC / attribute-based policy rules.
+- An arbitrary policy scripting language or external attribute-fetching engine.
 - Administration UI / dashboard.
 - Per-field (column-level) authorization.
 - A meta-package that re-exports every adapter (the `http` adapter is a standalone
   stdlib package, not an aggregator).
-- Auto-policy-reload and live policy hot-swap (deferred to future work).
+- Automatic database change watching for edits made outside the Enforcer APIs.
 
 ---
 
@@ -101,13 +101,16 @@ type User struct {
 - Permission lookup resolves the transitive closure of role parents (BFS/DFS).
 - The engine rejects or fails registration of a role graph that contains a cycle
   (e.g. `admin -> editor -> admin`) to guarantee termination of the resolution algorithm.
-- Wildcard permissions are **out of scope** for v1; exact matching on `resource` + `action`
-  is the only matching mode. Nice-to-have design agreed 2026-08-08 (ADR-024): evaluation
-  order exact → `resource:*` → `*:action` → `*:*`; `*:*` doubles as superadmin.
+- Exact resource/action matching remains the default. WithWildcardPermissions
+  enables complete-field star matching in the order exact, resource/star,
+  star/action, star/star. WithPolicyRules adds inherited attribute allow/deny
+  rules; any matching deny overrides allows, including superadmin.
 
 ### Decision
-The engine returns a boolean decision for `Enforce(userID, resource, action)`:
-`true` if the subject holds any role whose effective permissions contain the pair.
+The engine returns a boolean decision for `Enforce(ctx, userID, resource, action)`.
+Default mode checks the effective ordinary permission set; optional wildcard and
+attribute rules extend matching. Deny wins, and errors fail closed. EnforceCtx
+also reports underlying errors, including audit persistence failures.
 
 ---
 
@@ -165,7 +168,7 @@ go get github.com/rachmanzz/rbacgo
   engine and/or storage.
 - **FR-2 — Role hierarchy:** a role may declare parent roles; permission resolution includes
   inherited permissions; cycles are detected and rejected.
-- **FR-3 — Enforcement:** `Enforce(userID, resource, action) bool` resolves the subject's
+- **FR-3 — Enforcement:** `Enforce(ctx, userID, resource, action) bool` resolves the subject's
   effective roles and returns the decision.
 - **FR-4 — Middleware (stdlib):** provide `http.Handler` middleware that runs the enforce
   check and returns **403 Forbidden** (or **401 Unauthorized** when unauthenticated) on
@@ -175,21 +178,24 @@ go get github.com/rachmanzz/rbacgo
 - **FR-6 — Storage interface:** a `Store` interface abstracts persistence; shipped
   implementations:
   - **SQL store (primary):** PostgreSQL- and SQLite-compatible schema for
-    `roles`, `permissions`, `role_permissions`, `role_assignments`,
-    `role_hierarchy` (or adjacency via `parents`). No own `users` table —
-    user IDs are opaque strings in `role_assignments` (ADR-016/017). **Fully pluggable at the driver/pool
-    level:** the store accepts an existing `*sql.DB` supplied by the user, so they are free
-    to use their own driver and pool — e.g. `pgx`/`pgxpool` (via the pgx `stdlib` adapter)
-    for PostgreSQL, `go-sqlite3` for SQLite, or any other `database/sql` driver.
+    `roles`, `role_permissions`, `role_parents`, `role_assignments`,
+    `meta`, `role_rules`, and `role_metadata`. No own `users` table —
+    user IDs are opaque strings in `role_assignments` (ADR-016/017). **Driver/pool integration:** the store accepts an existing
+    `*sql.DB`. PostgreSQL and SQLite are auto-detected; MySQL syntax is selected explicitly.
+    Drivers tested include pgx/stdlib, go-sqlite3, and go-mysql-org/go-mysql in
+    its separate integration module. Other drivers require application verification,
+    and other dialects require a custom Store.
   - **Default store: SQLite (embedded).** When no store is configured, the engine uses an
     embedded SQLite store — `:memory:` by default (zero setup), or a file path for
     persistence.
-  - **LRU cache layer:** caches effective permission sets per user/role with configurable
-    TTL and LRU eviction; backends: **in-memory** and **Redis**.
+  - **Lookup cache:** effective permission sets per user. The in-memory backend
+    is a bounded LRU with TTL; Redis uses TTL and server-configured eviction.
 - **FR-7 — Concurrency safety:** engine and cache are safe for concurrent reads/writes.
 - **FR-8 — Customizability:** allow custom 401/403 handlers, custom user-ID extraction from
-  the request (header, JWT claim, session), and custom logger hooks.
-- **FR-9 — Environment configuration:** all store/cache settings are configurable via
+  the request (header, JWT claim, session), and optional standard-library
+  `slog` logging through `WithLogger` for permission lookup, invalidation publish,
+  and shared policy-version failures. Logging is disabled by default.
+- **FR-9 — Environment configuration:** the listed store/cache settings are configurable via
   environment variables. Variables use the default prefix **`RBAC_`** (configurable via
   `WithEnvPrefix("X_")`), read once at construction time:
 
@@ -197,7 +203,8 @@ go get github.com/rachmanzz/rbacgo
   | --- | --- | --- |
   | `RBAC_STORE` | `sqlite` | `sqlite`, `sql` (user-supplied `*sql.DB`), `memory` |
   | `RBAC_SQLITE_PATH` | `:memory:` | SQLite DSN / file path |
-  | `RBAC_DATABASE_URL` | — | Postgres/other DSN passed to the configured driver |
+  | `RBAC_DATABASE_URL` | — | PostgreSQL URL (pgx) or SQLite DSN for STORE=sql |
+  | `RBAC_SQL_TABLE_PREFIX` | — | SQL table prefix for STORE=sql |
   | `RBAC_CACHE` | `memory` | `memory`, `redis`, `none` |
   | `RBAC_CACHE_CAPACITY` | `1024` | LRU capacity |
   | `RBAC_CACHE_TTL` | `5m` | Cache TTL (Go duration string) |
@@ -207,14 +214,38 @@ go get github.com/rachmanzz/rbacgo
 
 ---
 
+## Feature extensions (implemented, unreleased)
+
+- Opt-in wildcard permissions and inherited allow/deny attribute rules. Deny
+  wins, including against superadmin; missing deny facts conservatively fail
+  closed. Supported JSON condition operators are documented in the feature guide.
+- Descriptive role metadata through separate persistence capabilities, preserving
+  Role's original struct layout. Metadata does not authorize access.
+- ApplyPolicyBatch atomically changes policy data in memory/SQL stores. Cache,
+  audit, and best-effort version work follow commit; decisions are not atomic
+  multi-query policy snapshots.
+- Optional Metrics snapshots and durable AuditSink events. The built-in local
+  file sink fsyncs each acknowledged event; audit failure denies authorization
+  and marks already-committed mutations explicitly.
+- Bounded registries, automatic idle eviction, context factories, request leases,
+  and terminal resource cleanup through Shutdown.
+- Explicit MySQL dialect and shard-aware Redis Cluster flushing. Neither cluster
+  invalidation nor pub/sub promises instantaneous distributed revocation.
+
+See docs/feature-guide.md for contracts, examples, ownership, and limitations.
+
 ## 7. Non-Functional Requirements
 
-- **Performance:** cache hit decision under 1 ms; O(1) lookup via map + LRU on hot path.
-- **Compatibility:** works with the latest stable Go release; the core engine logic has **zero**
+- **Performance target:** warm in-memory cache hits under 1 ms in a documented
+  benchmark workload; no universal latency guarantee. Cache hits use constant-time
+  lookup/LRU bookkeeping; misses traverse the role graph and Redis adds network I/O.
+- **Compatibility:** CI selects Go 1.27.2 (core/http/echo minimum 1.25.7; Fiber/Gin/examples minimum 1.26.0); the core engine logic has **zero**
   third-party dependencies (stdlib only). The module ships optional backends — embedded SQLite
   (`go-sqlite3`) and Redis cache (`go-redis`) — which are the module's only third-party
-  dependencies. Adapters depend only on their framework + core. Adapter compatibility matrix —
-  Fiber **v3**, Echo **v5**, Gin **v1 latest**, `net/http` (latest stdlib).
+  runtime dependencies; test dependencies are listed in third-party.md. Backend
+  usage is optional, but these packages remain dependencies of the root module.
+  Adapters add their framework dependencies. Adapter compatibility matrix —
+  Fiber **v3**, Echo **v5**, Gin **v1**, `net/http` (pinned CI toolchain).
 - **Backward compatibility:** public API is additive only; no breaking changes without a
   major version bump.
 - **Security:** hierarchy resolution must not over-grant; cycles rejected; no permission
@@ -224,58 +255,78 @@ go get github.com/rachmanzz/rbacgo
 
 ---
 
-## 8. Public API Draft
+## 8. Public API
 
 ### Core engine
 
 ```go
-package rbacgo
+package main
 
-// Default: embedded SQLite store. ":memory:" by default; pass a path for persistence.
-enforcer := rbacgo.New()
-// or: enforcer := rbacgo.New(rbacgo.WithSQLite("data/rbac.db"))
+import (
+    "context"
+    "log/slog"
+    "os"
 
-// Environment-driven config (default prefix "RBAC_"; override via WithEnvPrefix).
-enforcer := rbacgo.New(rbacgo.WithConfigFromEnv())
-// e.g. RBAC_STORE=sqlite RBAC_SQLITE_PATH=data/rbac.db RBAC_CACHE=redis RBAC_REDIS_ADDR=...
-
-// Fully pluggable SQL store: supply your own *sql.DB.
-// Example with pgxpool (PostgreSQL), via the pgx stdlib adapter:
-db, _ := sql.Open("pgx", "postgres://user:pass@localhost/db") // or pgxpool
-enforcer := rbacgo.New(
-    rbacgo.WithSQLStore(sqlstore.New(db)), // your driver/pool, any database/sql impl
-    rbacgo.WithLRU(
-        rbacgo.LRUBackendMemory(capacity, ttl),
-        // or: rbacgo.LRUBackendRedis(redisClient, capacity, ttl),
-    ),
+    "github.com/rachmanzz/rbacgo"
 )
 
-enforcer.RegisterRole(rbacgo.Role{
-    Name:        "editor",
-    Permissions: []rbacgo.Permission{{Resource: "articles", Action: "write"}},
-    Parents:     []string{"viewer"},
-})
-
-ok := enforcer.Enforce("user-123", "articles", "write") // true if permitted
+func main() {
+    ctx := context.Background()
+    enforcer, err := rbacgo.New(
+        rbacgo.WithTenant("acme"),
+        rbacgo.WithLogger(slog.New(slog.NewJSONHandler(os.Stderr, nil))),
+    )
+    if err != nil { panic(err) }
+    defer enforcer.Shutdown(ctx)
+    // Trusted provisioning; authenticate and authorize callers before exposing it.
+    if err := enforcer.RegisterRole(ctx, rbacgo.Role{
+        Name: "editor",
+        Permissions: []rbacgo.Permission{{Resource: "articles", Action: "write"}},
+    }); err != nil { panic(err) }
+    if err := enforcer.AssignRole(ctx, "user-123", "editor"); err != nil { panic(err) }
+    _ = enforcer.Enforce(ctx, "user-123", "articles", "write")
+}
 ```
+
+`WithSQLStore(db, opts...)` accepts a caller-owned PostgreSQL or SQLite pool;
+`WithSQLite(path)` selects file persistence. `WithConfigFromEnv()` configures
+the listed environment settings; `WithTenant` remains required.
+Use `WithLRU(NewMemoryLRU(capacity, ttl))` or
+`WithLRU(NewRedisLRU(client, prefix, ttl))` for explicit cache configuration.
+
+`RegisterRole`, `RegisterRoles`, `AssignRole`, and `ListRoles` are trusted
+APIs with no actor authorization. Their `*As` variants require the actor's
+configured role-management capability, as do `UpdateRole`, `DeleteRole`, and
+`UnassignRole`. The application must authenticate actors and validate tenant
+membership. Batch registration stops at its first error without rollback.
+
+`EnforceOwned`/`EnforceOwnedCtx` add `self`, `grp`, and `any` scope checks.
+`PermissionView` provides a frontend snapshot; its best-effort `policy_version`
+is an invalidation hint, not an atomic revision or a push notification.
 
 ### stdlib / Chi (`http` adapter)
 
 ```go
-import "github.com/rachmanzz/rbacgo/http"
+import httpadapter "github.com/rachmanzz/rbacgo/http"
 
-h := httpmiddleware.New(enforcer,
-    httpmiddleware.WithResourceAction(func(r *http.Request) (string, string) {
+h := httpadapter.New(enforcer,
+    httpadapter.WithResourceAction(func(r *http.Request) (string, string) {
         return resourceFromPath(r), r.Method
     }),
-    httpmiddleware.WithUserID(func(r *http.Request) string {
-        return userIDFromJWT(r) // your extraction logic
+    httpadapter.WithUserID(func(r *http.Request) (string, bool) {
+        id := userIDFromJWT(r)
+        return id, id != ""
     }),
-    httpmiddleware.WithDeniedHandler(my403Handler), // optional
+    httpadapter.WithDeniedHandler(my403Handler),
 )
-
 mux.Handle("/articles", h(http.HandlerFunc(listArticles)))
 ```
+
+Each adapter shares the core TenantRegistry with optional capacity, idle TTL,
+factory cancellation/timeouts, and middleware leases. Evict/ClearAndClose drain
+leases before cleanup; Shutdown also rejects new acquisitions and stops the
+janitor. Clear retains forget-only semantics. Context deadlines bound waits.
+Caller-owned resources remain separate; see docs/feature-guide.md.
 
 ### Framework adapters (illustrative)
 
@@ -314,18 +365,20 @@ r.Use(ginadapter.Middleware(enforcer, ginadapter.WithUserID(...)))
   response customization.
 - **M4 — Examples & docs (v1.0):** runnable examples per adapter, README, godoc, release
   tags with per-module versioning.
-- **Future (post-v1):** wildcard permissions, ABAC policies, auto-reload of policies from
+- **Future:** automatic detection of out-of-band policies from
   storage.
 
 ---
 
 ## 11. Open Questions / Future Work
 
-- Wildcard matching (`resource:*`, `*:read`, `*:*`) — defer to v2; design recorded in ADR-024.
-- Role metadata (optional `Metadata map[string]string` on `Role`) — ADR-024.
-- Superadmin as `*:*` wildcard role (no dedicated bypass option) — ADR-024.
-- Attribute-based policies layered on roles.
-- Auto-reload / hot-swap of policies from SQL without redeploy.
+- Opt-in wildcard matching is implemented (ADR-026); path globs/regex are not.
+- Metadata is implemented through separate APIs/capabilities (ADR-026), keeping
+  Role's original layout. The earlier field-based proposal is superseded.
+- Superadmin uses opt-in `*:*` matching and remains subject to deny rules.
+- Attribute conditions and deny rules are implemented; arbitrary scripting is not.
+- Detecting direct/out-of-band SQL changes automatically remains outside scope;
+  supported mutations are available without redeploy.
 - Field/column-level authorization helpers.
 
 ---

@@ -4,6 +4,7 @@ import "errors"
 
 // Sentinel errors returned by the engine and stores.
 var (
+	ErrEnforcerClosed = errors.New("rbacgo: enforcer is shut down")
 	// ErrRoleNotFound is returned when a referenced role does not exist.
 	ErrRoleNotFound = errors.New("rbacgo: role not found")
 	// ErrRoleExists is returned when registering a role that already exists.

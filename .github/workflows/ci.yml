@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.12'
+          go-version: '1.27.2'
           cache-dependency-path: |
             go.sum
             http/go.sum
@@ -43,6 +43,7 @@ jobs:
             echo/go.sum
             gin/go.sum
             examples/go.sum
+            integration/mysql/go.sum
 
       - name: gofmt (repo-wide)
         run: |
@@ -67,7 +68,7 @@ jobs:
       - name: Postgres integration test
         env:
           RBAC_TEST_POSTGRES_DSN: postgres://rbac:test@localhost:5432/rbac?sslmode=disable
-        run: go test -tags integration -count=1 -run TestSQLStorePostgres ./...
+        run: go test -tags integration -count=1 -run 'Postgres' ./...
 
   test-adapters:
     name: test (${{ matrix.module }})
@@ -76,13 +77,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [http, fiber, echo, gin, examples]
+        module: [http, fiber, echo, gin, examples, integration/mysql]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.12'
+          go-version: '1.27.2'
           cache-dependency-path: |
             go.sum
             http/go.sum
@@ -90,6 +91,7 @@ jobs:
             echo/go.sum
             gin/go.sum
             examples/go.sum
+            integration/mysql/go.sum
 
       - name: go.mod tidy
         working-directory: ${{ matrix.module }}
@@ -116,7 +118,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.12'
+          go-version: '1.27.2'
 
       - name: Fuzz hierarchy resolution vs oracle
         run: go test -run '^$' -fuzz '^FuzzHierarchyResolution$' -fuzztime=30s .
@@ -136,20 +138,20 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.12'
+          go-version: '1.27.2'
 
       - name: govulncheck (all modules)
         run: |
           set -e
-          for mod in . http fiber echo gin examples; do
+          for mod in . http fiber echo gin examples integration/mysql; do
             echo "== $mod =="
-            # govulncheck exits non-zero only for vulnerabilities that affect
-            # the build. GO-2026-5932 (golang.org/x/crypto/openpgp, transitive
-            # via Fiber v3 / Gin v1, no fix published, never called by rbacgo)
-            # is reported informationally (exit 0) and documented in README
-            # "Known residual (security)". Any new *called* vulnerability
-            # fails this job.
-            (cd "$mod" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
+            # Symbol-level vulnerabilities fail the job. Keep dated scan
+            # evidence in the audit report rather than assuming a fixed residual.
+            if [ "$mod" = integration/mysql ]; then
+              (cd "$mod" && go run golang.org/x/vuln/cmd/govulncheck@latest -test ./...)
+            else
+              (cd "$mod" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
+            fi
           done
 
   compliance:
@@ -163,17 +165,17 @@ jobs:
         run: |
           test -f LICENSE || { echo "LICENSE missing"; exit 1; }
           test -f THIRD_PARTY_NOTICES || { echo "THIRD_PARTY_NOTICES missing"; exit 1; }
-          for name in go-sqlite3 go-redis miniredis pgx fiber echo gin; do
+          for name in go-sqlite3 go-redis miniredis pgx fiber echo gin go-mysql; do
             grep -qi "$name" THIRD_PARTY_NOTICES || { echo "notice missing for $name"; exit 1; }
           done
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.12'
+          go-version: '1.27.2'
 
       - name: Direct dependencies up to date (warning only)
         run: |
-          for mod in . http fiber echo gin; do
+          for mod in . http fiber echo gin examples integration/mysql; do
             echo "== $mod =="
             (cd "$mod" && go mod edit -json | jq -r '.Require[] | select(.Indirect != true) | .Path' \
               | grep -v '^github.com/rachmanzz/rbacgo$' | while read -r p; do
@@ -184,3 +186,60 @@ jobs:
                 fi
               done)
           done
+
+  test-mysql:
+    name: integration (MySQL 8.4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rbac-test-only
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: rbac
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -prbac-test-only"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+      - name: MySQL policy, isolation, and rollback
+        working-directory: integration/mysql
+        env:
+          RBAC_TEST_MYSQL_DSN: root:rbac-test-only@127.0.0.1:3306/rbac
+        run: go test -race -count=1 -v ./...
+
+  test-redis-cluster:
+    name: integration (Redis Cluster)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+      - name: Create isolated three-primary cluster
+        run: |
+          for port in 17100 17101 17102; do
+            docker run -d --name "rbacgo-ci-redis-$port" --network host redis:7-alpine redis-server --bind 127.0.0.1 --port "$port" --cluster-enabled yes --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000 --appendonly no
+          done
+          for port in 17100 17101 17102; do
+            ready=false
+            for attempt in $(seq 1 30); do
+              if docker exec "rbacgo-ci-redis-$port" redis-cli -p "$port" ping; then ready=true; break; fi
+              sleep 1
+            done
+            test "$ready" = true
+          done
+          docker exec rbacgo-ci-redis-17100 redis-cli --cluster create 127.0.0.1:17100 127.0.0.1:17101 127.0.0.1:17102 --cluster-replicas 0 --cluster-yes
+      - name: Verify cross-shard cache invalidation
+        env:
+          RBAC_TEST_REDIS_CLUSTER_ADDRS: 127.0.0.1:17100,127.0.0.1:17101,127.0.0.1:17102
+        run: go test -race -tags integration -count=1 -run '^TestRedisClusterFlush$' .

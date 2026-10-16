@@ -128,19 +128,41 @@ func escapeGlob(s string) string {
 	return b.String()
 }
 
-func (c *redisLRU) Flush() {
+// FlushContext scans each Redis Cluster primary and routes single-key deletes
+// through the cluster client, avoiding CROSSSLOT. On standalone Redis it keeps
+// batched deletes. It is not a transactional snapshot during resharding/writes.
+func (c *redisLRU) FlushContext(ctx context.Context) error {
+	if cluster, ok := c.client.(*redis.ClusterClient); ok {
+		return cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+			return c.flushNode(ctx, node, true)
+		})
+	}
+	return c.flushNode(ctx, c.client, false)
+}
+
+func (c *redisLRU) flushNode(ctx context.Context, scanner redis.Cmdable, singleKey bool) error {
 	var cursor uint64
 	for {
-		keys, next, err := c.client.Scan(c.ctx, cursor, escapeGlob(c.prefix)+"*", 100).Result()
+		keys, next, err := scanner.Scan(ctx, cursor, escapeGlob(c.prefix)+"*", 100).Result()
 		if err != nil {
-			return
+			return err
 		}
 		if len(keys) > 0 {
-			_ = c.client.Del(c.ctx, keys...).Err()
+			if singleKey {
+				for _, key := range keys {
+					if err := c.client.Del(ctx, key).Err(); err != nil {
+						return err
+					}
+				}
+			} else if err := c.client.Del(ctx, keys...).Err(); err != nil {
+				return err
+			}
 		}
 		cursor = next
 		if cursor == 0 {
-			return
+			return nil
 		}
 	}
 }
+
+func (c *redisLRU) Flush() { _ = c.FlushContext(c.ctx) }

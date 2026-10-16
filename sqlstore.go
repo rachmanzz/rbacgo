@@ -8,12 +8,12 @@ import (
 	"strings"
 )
 
-// sqlStore is a Store backed by any *sql.DB from database/sql. It is fully
-// pluggable at the driver/pool level: pass a pool created with pgx/pgxpool
-// (via the pgx stdlib adapter), go-sqlite3, or any other driver. Only SQLite
-// and PostgreSQL dialects are officially supported.
+// sqlStore uses a caller-owned *sql.DB with SQLite/PostgreSQL detection or
+// explicit MySQL syntax. Drivers are supplied through database/sql; other
+// dialects require a custom Store.
 type sqlStore struct {
 	db          *sql.DB
+	tx          *sql.Tx
 	dialect     dialect
 	ph          func(n int) string // placeholder generator for the active dialect
 	sql         sqlQueries
@@ -58,6 +58,7 @@ type dialect int
 const (
 	dialectSQLite dialect = iota
 	dialectPostgres
+	dialectMySQL
 )
 
 // detectDialect probes the connected database to tell SQLite apart from other
@@ -71,16 +72,16 @@ func detectDialect(db *sql.DB) dialect {
 }
 
 func (d dialect) param(i int) string {
-	if d == dialectSQLite {
+	if d == dialectSQLite || d == dialectMySQL {
 		return "?"
 	}
 	return fmt.Sprintf("$%d", i)
 }
 
 // NewSQLStore builds a Store on top of an existing *sql.DB. It runs the schema
-// migration immediately and detects the SQL dialect (SQLite vs PostgreSQL)
-// automatically. SQLStoreOptions (e.g. WithTablePrefix) may customize the
-// store.
+// migration immediately. SQLite/PostgreSQL syntax is detected automatically;
+// use WithSQLDialect for explicit selection, including MySQL. WithTablePrefix
+// namespaces the additive schema. The caller owns the pool.
 func NewSQLStore(db *sql.DB, opts ...SQLStoreOption) (Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("rbacgo: nil *sql.DB")
@@ -92,7 +93,8 @@ func NewSQLStore(db *sql.DB, opts ...SQLStoreOption) (Store, error) {
 			return nil, err
 		}
 	}
-	s.sql = buildQueries(d, s.tablePrefix)
+	s.ph = s.dialect.param
+	s.sql = buildQueries(s.dialect, s.tablePrefix)
 	if err := s.migrate(); err != nil {
 		return nil, err
 	}
@@ -135,6 +137,14 @@ func validTablePrefix(prefix string) bool {
 }
 
 func (s *sqlStore) migrate() error {
+	if s.dialect == dialectMySQL {
+		for _, statement := range strings.Split(s.sql.createTables, ";") {
+			if _, err := s.db.Exec(statement); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	_, err := s.db.Exec(s.sql.createTables)
 	return err
 }
@@ -142,6 +152,9 @@ func (s *sqlStore) migrate() error {
 func buildQueries(d dialect, tablePrefix string) sqlQueries {
 	p := d.param
 	noConflict := "ON CONFLICT DO NOTHING"
+	if d == dialectMySQL {
+		noConflict = "ON DUPLICATE KEY UPDATE role_name = role_name"
+	}
 	roles := tablePrefix + "roles"
 	rolePerms := tablePrefix + "role_permissions"
 	roleParents := tablePrefix + "role_parents"
@@ -153,23 +166,30 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 			// instr matches the literal prefix with case-sensitive semantics.
 			return fmt.Sprintf("instr(%s, %s) = 1", column, p(1))
 		}
+		if d == dialectMySQL {
+			return fmt.Sprintf("%s LIKE %s ESCAPE '='", column, p(1))
+		}
 		return fmt.Sprintf(`%s LIKE %s ESCAPE '\'`, column, p(1))
 	}
-	return sqlQueries{
-		createTables: strings.Join([]string{
-			`CREATE TABLE IF NOT EXISTS ` + roles + ` (name TEXT PRIMARY KEY)`,
-			`CREATE TABLE IF NOT EXISTS ` + rolePerms + ` (` +
-				`role_name TEXT NOT NULL, resource TEXT NOT NULL, action TEXT NOT NULL,` +
-				`PRIMARY KEY (role_name, resource, action))`,
-			`CREATE TABLE IF NOT EXISTS ` + roleParents + ` (` +
-				`role_name TEXT NOT NULL, parent_name TEXT NOT NULL,` +
-				`PRIMARY KEY (role_name, parent_name))`,
-			`CREATE TABLE IF NOT EXISTS ` + userRoles + ` (` +
-				`user_id TEXT NOT NULL, role_name TEXT NOT NULL,` +
-				`PRIMARY KEY (user_id, role_name))`,
-			`CREATE TABLE IF NOT EXISTS ` + meta + ` (key TEXT PRIMARY KEY, value INTEGER NOT NULL)`,
-		}, ";"),
-		insertRole: fmt.Sprintf(`INSERT INTO %s (name) VALUES (%s)`, roles, p(1)),
+	keyType, payloadType, integerType, suffix := "TEXT", "TEXT", "INTEGER", ""
+	if d == dialectMySQL {
+		keyType, payloadType, integerType, suffix = "VARBINARY(768)", "LONGTEXT", "BIGINT UNSIGNED", " ENGINE=InnoDB"
+	}
+	table := func(name, definition string) string {
+		return "CREATE TABLE IF NOT EXISTS " + name + " (" + definition + ")" + suffix
+	}
+	schema := strings.Join([]string{
+		table(roles, "name "+keyType+" PRIMARY KEY"),
+		table(rolePerms, "role_name "+keyType+" NOT NULL, resource "+keyType+" NOT NULL, action "+keyType+" NOT NULL, PRIMARY KEY (role_name, resource, action)"),
+		table(roleParents, "role_name "+keyType+" NOT NULL, parent_name "+keyType+" NOT NULL, PRIMARY KEY (role_name, parent_name)"),
+		table(userRoles, "user_id "+keyType+" NOT NULL, role_name "+keyType+" NOT NULL, PRIMARY KEY (user_id, role_name)"),
+		table(meta, "key "+keyType+" PRIMARY KEY, value "+integerType+" NOT NULL"),
+		table(tablePrefix+"role_rules", "role_name "+keyType+" PRIMARY KEY, payload "+payloadType+" NOT NULL"),
+		table(tablePrefix+"role_metadata", "role_name "+keyType+" PRIMARY KEY, payload "+payloadType+" NOT NULL"),
+	}, ";")
+	q := sqlQueries{
+		createTables: schema,
+		insertRole:   fmt.Sprintf(`INSERT INTO %s (name) VALUES (%s)`, roles, p(1)),
 		insertPerm: fmt.Sprintf(
 			`INSERT INTO %s (role_name, resource, action) VALUES (%s, %s, %s) %s`,
 			rolePerms, p(1), p(2), p(3), noConflict),
@@ -231,17 +251,23 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 				`SELECT COUNT(*) FROM reachable WHERE name = %s`,
 			roleParents, p(1), roleParents, p(2)),
 	}
+	if d == dialectMySQL {
+		q.policyVersion = "SELECT value FROM " + meta + " WHERE `key` = 'policy'"
+		q.nextPolicyVersion = "INSERT INTO " + meta + " (`key`, value) VALUES ('policy', 1) ON DUPLICATE KEY UPDATE value = value + 1"
+		q.createTables = strings.Replace(q.createTables, " (key ", " (`key` ", 1)
+	}
+	return q
 }
 
 func (s *sqlStore) AddRole(ctx context.Context, role Role) error {
 	if !validRole(role) {
 		return ErrInvalidRole
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, owned, err := s.beginWrite(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	defer rollbackOwned(tx, owned) //nolint:errcheck // rollback after commit is a no-op
 
 	exists, err := s.roleExists(ctx, tx, role.Name)
 	if err != nil {
@@ -276,11 +302,11 @@ func (s *sqlStore) AddRole(ctx context.Context, role Role) error {
 	if err := s.checkCycles(ctx, tx, role.Name); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitOwned(tx, owned)
 }
 
 func (s *sqlStore) GetRole(ctx context.Context, name string) (Role, bool, error) {
-	exists, err := s.roleExists(ctx, s.db, name)
+	exists, err := s.roleExists(ctx, s.executor(), name)
 	if err != nil {
 		return Role{}, false, err
 	}
@@ -290,7 +316,7 @@ func (s *sqlStore) GetRole(ctx context.Context, name string) (Role, bool, error)
 
 	role := Role{Name: name}
 
-	rows, err := s.db.QueryContext(ctx, s.sql.rolePerms, name)
+	rows, err := s.executor().QueryContext(ctx, s.sql.rolePerms, name)
 	if err != nil {
 		return Role{}, false, err
 	}
@@ -306,7 +332,7 @@ func (s *sqlStore) GetRole(ctx context.Context, name string) (Role, bool, error)
 		return Role{}, false, err
 	}
 
-	rows, err = s.db.QueryContext(ctx, s.sql.roleParents, name)
+	rows, err = s.executor().QueryContext(ctx, s.sql.roleParents, name)
 	if err != nil {
 		return Role{}, false, err
 	}
@@ -339,6 +365,9 @@ func (s *sqlStore) ListRolesByPrefix(ctx context.Context, prefix string) ([]Role
 	pattern := prefix
 	if s.dialect != dialectSQLite {
 		pattern = escapeLike(prefix) + "%"
+		if s.dialect == dialectMySQL {
+			pattern = strings.NewReplacer("=", "==", "%", "=%", "_", "=_").Replace(prefix) + "%"
+		}
 	}
 	return s.listRolesPattern(ctx, s.sql.listRolesByPrefix, s.sql.listPermsByPrefix, s.sql.listParentsByPrefix, pattern)
 }
@@ -372,9 +401,9 @@ func (s *sqlStore) roleNames(ctx context.Context, q, pattern string) ([]string, 
 		err  error
 	)
 	if pattern == "" {
-		rows, err = s.db.QueryContext(ctx, q)
+		rows, err = s.executor().QueryContext(ctx, q)
 	} else {
-		rows, err = s.db.QueryContext(ctx, q, pattern)
+		rows, err = s.executor().QueryContext(ctx, q, pattern)
 	}
 	if err != nil {
 		return nil, err
@@ -398,9 +427,9 @@ func (s *sqlStore) loadRolePerms(ctx context.Context, q, pattern string, roles [
 		err  error
 	)
 	if pattern == "" {
-		rows, err = s.db.QueryContext(ctx, q)
+		rows, err = s.executor().QueryContext(ctx, q)
 	} else {
-		rows, err = s.db.QueryContext(ctx, q, pattern)
+		rows, err = s.executor().QueryContext(ctx, q, pattern)
 	}
 	if err != nil {
 		return err
@@ -425,9 +454,9 @@ func (s *sqlStore) loadRoleParents(ctx context.Context, q, pattern string, roles
 		err  error
 	)
 	if pattern == "" {
-		rows, err = s.db.QueryContext(ctx, q)
+		rows, err = s.executor().QueryContext(ctx, q)
 	} else {
-		rows, err = s.db.QueryContext(ctx, q, pattern)
+		rows, err = s.executor().QueryContext(ctx, q, pattern)
 	}
 	if err != nil {
 		return err
@@ -459,11 +488,11 @@ func (s *sqlStore) UpdateRole(ctx context.Context, role Role) error {
 	if !validRole(role) {
 		return ErrInvalidRole
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, owned, err := s.beginWrite(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	defer rollbackOwned(tx, owned) //nolint:errcheck // rollback after commit is a no-op
 
 	exists, err := s.roleExists(ctx, tx, role.Name)
 	if err != nil {
@@ -500,25 +529,30 @@ func (s *sqlStore) UpdateRole(ctx context.Context, role Role) error {
 	if err := s.checkCycles(ctx, tx, role.Name); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitOwned(tx, owned)
 }
 
 func (s *sqlStore) AssignRole(ctx context.Context, userID, roleName string) error {
-	ok, err := s.roleExists(ctx, s.db, roleName)
+	tx, owned, err := s.beginWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollbackOwned(tx, owned)
+	ok, err := s.roleExists(ctx, tx, roleName)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return ErrRoleNotFound
 	}
-	if _, err := s.db.ExecContext(ctx, s.sql.assignRole, userID, roleName); err != nil {
+	if _, err := tx.ExecContext(ctx, s.sql.assignRole, userID, roleName); err != nil {
 		return err
 	}
-	return nil
+	return commitOwned(tx, owned)
 }
 
 func (s *sqlStore) GetRoles(ctx context.Context, userID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, s.sql.userRoles, userID)
+	rows, err := s.executor().QueryContext(ctx, s.sql.userRoles, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -538,11 +572,11 @@ func (s *sqlStore) GetRoles(ctx context.Context, userID string) ([]string, error
 // child parent links are removed together with the role itself. Deleting a
 // role that is still assigned to a user fails with ErrRoleInUse.
 func (s *sqlStore) DeleteRole(ctx context.Context, name string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, owned, err := s.beginWrite(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	defer rollbackOwned(tx, owned) //nolint:errcheck // rollback after commit is a no-op
 
 	exists, err := s.roleExists(ctx, tx, name)
 	if err != nil {
@@ -558,6 +592,11 @@ func (s *sqlStore) DeleteRole(ctx context.Context, name string) error {
 	if inUse {
 		return ErrRoleInUse
 	}
+	for _, kind := range []string{"role_rules", "role_metadata"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+s.tablePrefix+kind+" WHERE role_name = "+s.ph(1), name); err != nil {
+			return err
+		}
+	}
 	// Cascade: remove child links first so child roles never keep a dangling
 	// parent reference.
 	for _, q := range []string{s.sql.deleteParentLinks, s.sql.deleteRoleParents, s.sql.deleteRolePerms, s.sql.deleteRole} {
@@ -565,23 +604,28 @@ func (s *sqlStore) DeleteRole(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return commitOwned(tx, owned)
 }
 
 // UnassignRole removes a role from a user's assignments. Unassigning a role
 // the user does not hold is a no-op.
 func (s *sqlStore) UnassignRole(ctx context.Context, userID, roleName string) error {
-	ok, err := s.roleExists(ctx, s.db, roleName)
+	tx, owned, err := s.beginWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollbackOwned(tx, owned)
+	ok, err := s.roleExists(ctx, tx, roleName)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return ErrRoleNotFound
 	}
-	if _, err := s.db.ExecContext(ctx, s.sql.unassignRole, userID, roleName); err != nil {
+	if _, err := tx.ExecContext(ctx, s.sql.unassignRole, userID, roleName); err != nil {
 		return err
 	}
-	return nil
+	return commitOwned(tx, owned)
 }
 
 // roleInUse reports whether any user is currently assigned the role.
@@ -597,7 +641,7 @@ func (s *sqlStore) roleInUse(ctx context.Context, q querrer, name string) (bool,
 // mutation is ever recorded through an Enforcer).
 func (s *sqlStore) PolicyVersion(ctx context.Context) (uint64, error) {
 	var v uint64
-	err := s.db.QueryRowContext(ctx, s.sql.policyVersion).Scan(&v)
+	err := s.executor().QueryRowContext(ctx, s.sql.policyVersion).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -609,8 +653,26 @@ func (s *sqlStore) PolicyVersion(ctx context.Context) (uint64, error) {
 // mutation agrees on the next value, so multi-instance deployments share one
 // version.
 func (s *sqlStore) NextPolicyVersion(ctx context.Context) (uint64, error) {
+	if s.dialect == dialectMySQL {
+		tx, owned, err := s.beginWrite(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer rollbackOwned(tx, owned)
+		if _, err := tx.ExecContext(ctx, s.sql.nextPolicyVersion); err != nil {
+			return 0, err
+		}
+		var value uint64
+		if err := tx.QueryRowContext(ctx, s.sql.policyVersion).Scan(&value); err != nil {
+			return 0, err
+		}
+		if err := commitOwned(tx, owned); err != nil {
+			return 0, err
+		}
+		return value, nil
+	}
 	var v uint64
-	err := s.db.QueryRowContext(ctx, s.sql.nextPolicyVersion).Scan(&v)
+	err := s.executor().QueryRowContext(ctx, s.sql.nextPolicyVersion).Scan(&v)
 	return v, err
 }
 

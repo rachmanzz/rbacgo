@@ -4,57 +4,25 @@ package fiberadapter
 
 import (
 	"context"
-	"sync"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/rachmanzz/rbacgo"
 )
 
-// TenantRegistry lazily creates and caches one *rbacgo.Enforcer per tenant.
-// The factory is called at most once per tenant, even under concurrent
-// requests, so tenants can be provisioned on first use.
-type TenantRegistry struct {
-	factory func(tenant string) (*rbacgo.Enforcer, error)
-	mu      sync.Mutex
-	cache   map[string]*tenantEntry
+// TenantRegistry is the shared core registry, including bounded storage,
+// context-aware provisioning, request leases, idle eviction, and shutdown.
+type TenantRegistry = rbacgo.TenantRegistry
+
+func NewTenantRegistry(factory func(string) (*rbacgo.Enforcer, error)) *TenantRegistry {
+	return rbacgo.NewTenantRegistry(factory)
 }
 
-type tenantEntry struct {
-	once sync.Once
-	enf  *rbacgo.Enforcer
-	err  error
+func NewTenantRegistryWithOptions(factory func(string) (*rbacgo.Enforcer, error), opts ...rbacgo.TenantRegistryOption) *TenantRegistry {
+	return rbacgo.NewTenantRegistryWithOptions(factory, opts...)
 }
 
-// NewTenantRegistry builds a registry. The factory receives the tenant ID
-// resolved from the request and must return that tenant's Enforcer. It panics
-// on a nil factory.
-func NewTenantRegistry(factory func(tenant string) (*rbacgo.Enforcer, error)) *TenantRegistry {
-	if factory == nil {
-		panic("rbacgo: nil tenant enforcer factory")
-	}
-	return &TenantRegistry{factory: factory, cache: make(map[string]*tenantEntry)}
-}
-
-// Get returns the Enforcer for tenant, creating it on first use. The factory
-// error, if any, is returned to every caller of this tenant.
-func (r *TenantRegistry) Get(tenant string) (*rbacgo.Enforcer, error) {
-	r.mu.Lock()
-	e, ok := r.cache[tenant]
-	if !ok {
-		e = &tenantEntry{}
-		r.cache[tenant] = e
-	}
-	r.mu.Unlock()
-	e.once.Do(func() { e.enf, e.err = r.factory(tenant) })
-	return e.enf, e.err
-}
-
-// Clear forgets every cached Enforcer. The next request for a tenant creates
-// a fresh one.
-func (r *TenantRegistry) Clear() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cache = make(map[string]*tenantEntry)
+func NewTenantRegistryContext(factory func(context.Context, string) (*rbacgo.Enforcer, error), opts ...rbacgo.TenantRegistryOption) *TenantRegistry {
+	return rbacgo.NewTenantRegistryContext(factory, opts...)
 }
 
 type tenantContextKey int
@@ -181,10 +149,11 @@ func TenantMiddleware(registry *TenantRegistry, opts ...TenantOption) fiber.Hand
 		if !ok || tenant == "" {
 			return o.unauthorized(c)
 		}
-		enf, err := registry.Get(tenant)
+		enf, release, err := registry.Acquire(c.Context(), tenant)
 		if err != nil {
 			return o.enforcerError(c, err)
 		}
+		defer release()
 		ctx := context.WithValue(c.Context(), tenantIDKey, tenant)
 		ctx = context.WithValue(ctx, enforcerKey, enf)
 		c.SetContext(ctx)

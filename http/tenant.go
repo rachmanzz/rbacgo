@@ -6,57 +6,24 @@ package httpadapter
 import (
 	"context"
 	"net/http"
-	"sync"
 
 	"github.com/rachmanzz/rbacgo"
 )
 
-// TenantRegistry lazily creates and caches one *rbacgo.Enforcer per tenant.
-// The factory is called at most once per tenant, even under concurrent
-// requests, so tenants can be provisioned on first use.
-type TenantRegistry struct {
-	factory func(tenant string) (*rbacgo.Enforcer, error)
-	mu      sync.Mutex
-	cache   map[string]*tenantEntry
+// TenantRegistry is the shared core registry, including bounded storage,
+// context-aware provisioning, request leases, idle eviction, and shutdown.
+type TenantRegistry = rbacgo.TenantRegistry
+
+func NewTenantRegistry(factory func(string) (*rbacgo.Enforcer, error)) *TenantRegistry {
+	return rbacgo.NewTenantRegistry(factory)
 }
 
-type tenantEntry struct {
-	once sync.Once
-	enf  *rbacgo.Enforcer
-	err  error
+func NewTenantRegistryWithOptions(factory func(string) (*rbacgo.Enforcer, error), opts ...rbacgo.TenantRegistryOption) *TenantRegistry {
+	return rbacgo.NewTenantRegistryWithOptions(factory, opts...)
 }
 
-// NewTenantRegistry builds a registry. The factory receives the tenant ID
-// resolved from the request and must return that tenant's Enforcer (e.g.
-// rbacgo.New(rbacgo.WithTenant(tenant), rbacgo.WithStore(sharedStore))).
-// It panics on a nil factory.
-func NewTenantRegistry(factory func(tenant string) (*rbacgo.Enforcer, error)) *TenantRegistry {
-	if factory == nil {
-		panic("rbacgo: nil tenant enforcer factory")
-	}
-	return &TenantRegistry{factory: factory, cache: make(map[string]*tenantEntry)}
-}
-
-// Get returns the Enforcer for tenant, creating it on first use. The factory
-// error, if any, is returned to every caller of this tenant.
-func (r *TenantRegistry) Get(tenant string) (*rbacgo.Enforcer, error) {
-	r.mu.Lock()
-	e, ok := r.cache[tenant]
-	if !ok {
-		e = &tenantEntry{}
-		r.cache[tenant] = e
-	}
-	r.mu.Unlock()
-	e.once.Do(func() { e.enf, e.err = r.factory(tenant) })
-	return e.enf, e.err
-}
-
-// Clear forgets every cached Enforcer. The next request for a tenant creates
-// a fresh one (e.g. after redeploying changed role definitions).
-func (r *TenantRegistry) Clear() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cache = make(map[string]*tenantEntry)
+func NewTenantRegistryContext(factory func(context.Context, string) (*rbacgo.Enforcer, error), opts ...rbacgo.TenantRegistryOption) *TenantRegistry {
+	return rbacgo.NewTenantRegistryContext(factory, opts...)
 }
 
 type tenantContextKey int
@@ -101,31 +68,31 @@ func WithTenantResolver(fn func(*http.Request) (string, bool)) TenantOption {
 	return func(o *TenantOptions) { o.tenantResolver = fn }
 }
 
-// WithUserID sets the function that extracts an authenticated subject ID from
+// WithTenantUserID sets the function that extracts an authenticated subject ID from
 // the request. It is REQUIRED, with the same semantics as the single-tenant
 // middleware.
 func WithTenantUserID(fn func(*http.Request) (string, bool)) TenantOption {
 	return func(o *TenantOptions) { o.userID = fn }
 }
 
-// WithResourceAction sets the function that derives (resource, action) from
+// WithTenantResourceAction sets the function that derives (resource, action) from
 // the request. Defaults to (URL path, HTTP method).
 func WithTenantResourceAction(fn func(*http.Request) (string, string)) TenantOption {
 	return func(o *TenantOptions) { o.resourceAction = fn }
 }
 
-// WithUnauthorizedHandler overrides the default 401 handler (also used when
+// WithTenantUnauthorizedHandler overrides the default 401 handler (also used when
 // the tenant cannot be resolved).
 func WithTenantUnauthorizedHandler(h func(http.ResponseWriter, *http.Request)) TenantOption {
 	return func(o *TenantOptions) { o.unauthorized = h }
 }
 
-// WithDeniedHandler overrides the default 403 handler.
+// WithTenantDeniedHandler overrides the default 403 handler.
 func WithTenantDeniedHandler(h func(http.ResponseWriter, *http.Request)) TenantOption {
 	return func(o *TenantOptions) { o.denied = h }
 }
 
-// WithEnforcerErrorHandler overrides the default 500 handler invoked when the
+// WithTenantEnforcerErrorHandler overrides the default 500 handler invoked when the
 // tenant's Enforcer cannot be created (factory error).
 func WithTenantEnforcerErrorHandler(h func(http.ResponseWriter, *http.Request, error)) TenantOption {
 	return func(o *TenantOptions) { o.enforcerError = h }
@@ -157,7 +124,7 @@ func defaultTenantOptions() TenantOptions {
 //			t := r.Header.Get("X-Tenant-ID")
 //			return t, t != ""
 //		}),
-//		httpadapter.WithUserID(func(r *http.Request) (string, bool) {
+//		httpadapter.WithTenantUserID(func(r *http.Request) (string, bool) {
 //			return r.Context().Value(authUserKey).(string), true
 //		}),
 //	)
@@ -186,11 +153,12 @@ func NewTenant(registry *TenantRegistry, opts ...TenantOption) func(http.Handler
 				o.unauthorized(w, r)
 				return
 			}
-			enf, err := registry.Get(tenant)
+			enf, release, err := registry.Acquire(r.Context(), tenant)
 			if err != nil {
 				o.enforcerError(w, r, err)
 				return
 			}
+			defer release()
 			r = r.WithContext(context.WithValue(r.Context(), tenantIDKey, tenant))
 			r = r.WithContext(context.WithValue(r.Context(), enforcerKey, enf))
 			userID, ok := o.userID(r)

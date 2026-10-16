@@ -1,109 +1,102 @@
 # Known Limitations — rbacgo
 
-- **Status:** Draft
-- **Last updated:** 2026-08-02
+- **Last updated:** 2026-10-16
+- **Reference:** docs/feature-guide.md and .knowledges/audit/feature-audit_v3.md
 
-## 1. Scope limitations (v1)
+## Policy semantics
 
-- **RBAC only.** No ABAC / attribute-based policy rules. Decisions are based solely on
-  role membership and exact `resource` + `action` matching.
-- **No wildcard permissions.** Patterns such as `resource:*` or `*:read` are not supported
-  in v1. Nice-to-have backlog (user decision 2026-08-08, ADR-024): when implemented,
-  matching order is exact match → `resource:*` → `*:action` → `*:*`; a role holding
-  `*:*` acts as superadmin (no separate bypass option needed); exact-match behavior
-  stays unchanged (backward compatible).
-- **No role metadata.** Roles carry only name, permissions, and parents. Nice-to-have
-  backlog (ADR-024): optional `Metadata map[string]string` on `Role` — descriptive
-  only, no effect on validation, enforcement, SQL schema, or tenant scoping.
-- **No superadmin special-case.** "Superadmin" is modeled as a role holding the `*:*`
-  wildcard permission (backlog design, ADR-024), not as a dedicated option or bypass
-  path in the Enforcer.
-- **No per-field (column-level) authorization.** Authorization is at the resource/action
-  level only.
-- **No administration UI** for managing roles or permissions.
+- Exact RBAC matching remains the default. Wildcards require
+  WithWildcardPermissions and match only a complete resource/action field equal
+  to "*". There is no path glob, regex, or arbitrary policy scripting language.
+- Attribute conditions and deny rules require WithPolicyRules on every relevant
+  Enforcer and a RoleRuleStore. Conditions use the documented JSON operators;
+  they do not execute arbitrary callbacks or external queries. Applications
+  must supply trusted facts. Any matching deny overrides allows, including
+  wildcard superadmin. Unknown deny facts conservatively fail closed.
+- Conditional allows are additive to ordinary permissions, not restrictions on
+  broad grants. Metadata is descriptive and does not affect decisions.
+- PermissionView exposes ordinary allow patterns/scopes. It does not evaluate
+  attribute-sensitive rules or represent final authorization for a resource.
+- No administration UI, per-field authorization, or adapter aggregator.
 
-## 2. Framework support limitations
+## Administrative boundaries
 
-- **Fiber v3 only** — Fiber v2 users cannot use the adapter.
-- **Echo v5 only** — Echo v4 users cannot use the adapter.
-- **Gin v1 latest** — only the current major line.
-- **Chi** has no dedicated adapter; Chi users must use the stdlib `http` adapter (Chi is
-  built on `net/http`).
-- **`http` adapter is not an aggregator** — it is a standalone stdlib package and does not
-  re-export the other adapters.
+- RegisterRole, RegisterRoles, AssignRole, and ListRoles remain trusted APIs
+  without caller checks. Their As variants and update/delete/unassign check the
+  configured tenant management permission. Authenticate actors and verify
+  tenant membership before selecting an Enforcer.
+- Direct Store calls bypass Enforcer scoping, capability checks, audit emission,
+  version bookkeeping, and cache invalidation.
+- RegisterRoles/RegisterRolesAs retain sequential partial commits.
+  ApplyPolicyBatch atomically changes policy data on stores implementing
+  AtomicPolicyStore. Cache/version/audit work follows commit, and multi-query
+  decisions are not atomic snapshots of concurrent policy changes.
 
-## 3. Engine & storage limitations
+## Storage and consistency
 
-- **Pluggable store, SQLite default.** Default store is embedded SQLite (`:memory:`
-  unless a file path is given); data resets on restart when using `:memory:`. The SQL
-  store relies on a user-supplied `*sql.DB` (pgx5/pgxpool/stdlib, go-sqlite3, or any
-  `database/sql` driver); pool/driver behavior is the responsibility of the user's chosen
-  library.
-- **Env config is read once at construction** (`WithConfigFromEnv`, prefix `RBAC_`). No
-  hot-reload — restart required to apply env changes. Explicit options override env vars;
-  env vars override defaults.
-- **LRU cache trade-offs.** Within one process, mutations invalidate the cache
-  immediately. Across processes/instances sharing one store, coherence is bounded
-  by TTL — external changes to storage are not visible until TTL expiry unless
-  explicit invalidation is called — **unless** the instances exchange
-  invalidation events over Redis pub/sub (`WithCacheInvalidator`), which makes
-  mutations on any instance evict the affected snapshots on every subscriber
-  immediately (events are best-effort: a network partition or publish failure
-  degrades back to TTL-bounded coherence).
-- **Cache is on by default.** `New()` installs an in-memory LRU (1024 entries, 5m TTL), so
-  each enforcer holds up to that many effective-permission snapshots in memory. Use
-  `WithConfigFromEnv` + `RBAC_CACHE=none` to disable, or `WithLRU` to swap the backend.
-- **Redis backend** adds a network round-trip on cache misses; cold starts are slower than
-  in-memory.
-- **`policy_version` default is in-memory.** Without a shared source (SQL `meta` table via
-  the SQL store, or `NewRedisPolicyVersion` + `WithPolicyVersionStore`), each process keeps
-  its own counter; multi-instance deployments must point every instance at the same shared
-  source for consistent versions.
-- **Hierarchy resolution cost** grows with the depth/breadth of the role graph; mitigated
-  by caching effective permission sets.
-- **Recursive hierarchy traversal.** `Enforce`/`HasRole` (effective-permission and inherited-role
-  collection), SQL cycle checks (`checkCycles`), and the memory store's `detectCycle` traverse
-  the parent graph recursively. Pathologically deep hierarchies (hundreds of thousands of
-  levels) can exhaust the goroutine stack; keep hierarchies shallow and wide instead.
-- **Registration is quadratic on pathological chains.** Each role insert runs a
-  cycle check over its transitive parents, so building a linear chain of N roles
-  costs O(N²) (verified: 10,000-level chains register in ~1s, 100,000 levels do
-  not complete in 3 minutes). Real hierarchies are shallow; a cycle check after
-  every insert is the price of rejecting cycles at registration time.
-- **No auto-reload / hot-swap** of policies from storage without redeploy.
-- **Tenant is fixed per Enforcer.** `WithTenant` is required and cannot be
-  changed after construction; an application serving many tenants builds one
-  Enforcer per tenant (the documented pattern). Tenant-ID uniqueness across
-  enforcers is the application's responsibility — the library guarantees
-  role-name and assignment isolation per tenant, not that two enforcers never
-  use the same tenant id (same tenant id is intentional for multi-instance
-  scaling). **Tenant IDs must not contain the internal separator `::`**
-  (rejected at construction): a tenant like `a::b` would share store keys
-  with tenant `a`'s role `b::x` and break isolation. Role/user names may
-  contain `::` safely: within one tenant they are full suffixes of their
-  scoped keys, so they remain unambiguous per tenant.
+- Shipped SQL dialects are SQLite, PostgreSQL, and explicit MySQL syntax.
+  Tested drivers are listed in the README. Other dialects require a custom Store.
+  MySQL requires recursive-CTE support (8+ syntax), InnoDB, and keys no longer
+  than 768 bytes including tenant prefixes. Server recursion limits apply.
+- The go-sqlite3 backend requires CGO. Default SQLite is :memory: and resets on restart. Use a path for persistence.
+  Memory storage loses all state on restart. Custom Store concurrency and
+  optional capabilities remain the implementer's responsibility.
+- PostgreSQL/MySQL mutations serialize per table prefix through a meta-row
+  transaction lock, including batches. This limits concurrent write throughput;
+  credentials need meta INSERT/UPDATE/SELECT rights. SQLite uses its writer
+  locking. Direct SQL writers bypass this serialization.
+- Role rules/metadata use additive SQL side tables. Direct SQL edits must
+  preserve invariants and require explicit invalidation or TTL expiry.
+  There is no database change watcher or automatic env configuration reload.
+- Shared policy versions are best-effort hints, not atomic policy revisions.
+  Source outages use local counters, which can diverge or move backward after
+  recovery. Clients must fetch fresh snapshots; versions are not notifications.
+- Pub/sub invalidation is asynchronous and best-effort. Network failures can
+  leave remote caches stale until TTL expiry or another invalidation. There is
+  no instantaneous distributed revocation guarantee.
+- Redis Cluster flush visits primaries and deletes individual keys. It is not
+  an atomic snapshot during writes/resharding; errors can leave entries behind.
+  FlushContext reports failures; legacy Flush is best-effort. Redis eviction
+  follows server policy/TTL rather than a bounded client-side LRU.
+- Custom shared caches should implement GenerationCacheBackend; otherwise
+  stale-fill protection is limited to mutations observed by one Enforcer.
 
-## 4. Concurrency & performance notes
+## Registry and resource lifecycle
 
-- Engine and cache are designed to be safe for concurrent reads/writes, but correctness of
-  user-provided `Store` implementations is the responsibility of the implementer.
-- Cache hit decision is targeted at under 1 ms; uncached decisions depend on the store.
-- **Per-tenant adapter memory.** Each `TenantRegistry` caches one Enforcer per
-  tenant for the process lifetime (factory runs once per tenant, by design).
-  Every cached Enforcer holds its own LRU (default 1024 snapshots, 5m TTL),
-  so a registry serving N tenants keeps roughly N × cache-budget in memory.
-  With a shared SQL store the per-tenant footprint is small; with per-tenant
-  memory stores it is the whole tenant dataset. Bound tenant IDs (no
-  user-controlled unbounded tenant names) and call `Clear()` to release
-  cached Enforcers when tenants are decommissioned.
-- **Memory store user keys.** The in-memory store retains one (empty) entry
-  per user ID ever assigned, so its footprint grows with the number of
-  distinct user IDs, not with current assignments.
+- Capacity/idle eviction/factory timeouts are optional. Without them, the
+  registry retains entries until explicit removal. Factory failures are cached.
+  Bounds apply to cached entries, not all active leases or retained references.
+- Middleware leases protect active handlers from cleanup. Direct Get calls
+  retain no lease; use Acquire for lifecycle protection. Release leases promptly.
+- Shutdown is terminal; ClearAndClose drains a reusable snapshot; Clear only
+  forgets entries. Cleanup deadlines do not forcibly terminate factories or
+  handlers. Callbacks must cooperate with cancellation; late factory results
+  are closed when they arrive. Do not block on cleanup from a holder of the
+  same lease or its factory.
+- Enforcer.Shutdown closes owned SQLite/SQL and Redis resources. Close retains
+  its older nonterminal behavior. Caller-owned SQL pools, Stores, Redis clients,
+  invalidators, and audit sinks must be closed separately.
+- Tenants are fixed per Enforcer; IDs cannot contain the reserved separator ::.
+  Namespacing does not authenticate or authorize the tenant resolver.
 
-## 5. Delivery limitations (current repo state)
+## Observability and performance
 
-- Engine, stores, cache, and all four adapters are implemented and tested (P1–P4 complete).
-- First public release `v0.1.0-1` tagged per Go multi-module conventions
-  (`v0.1.0-1`, `http/v0.1.0-1`, `fiber/v0.1.0-1`, `echo/v0.1.0-1`, `gin/v0.1.0-1`).
-- CI pipeline (`.github/workflows/ci.yml`) runs build/vet/race tests, Postgres integration
-  tests, `govulncheck`, and compliance checks.
+- Metrics are counters and cumulative latency, not histograms or a public HTTP
+  exporter. Snapshot reads counters individually. Configure the application's
+  own authenticated exporter and cardinality/retention policy.
+- Durable file audit uses synchronous append and fsync on a persistent
+  filesystem; tmpfs cannot preserve events across restart. One local writer is
+  supported; rotation, retention, backups and file access belong to the caller.
+  It is not tamper-resistant, a distributed outbox, or atomic with SQL mutations.
+  AuditWriteError.Committed identifies changes that succeeded before audit
+  persistence failed. Do not blindly retry them. Failed mutation attempts are
+  not a separate event stream; management decisions are audited.
+- Audit sink failure denies authorization. Sink latency and availability affect
+  request paths. Operational logging is separate and opt-in.
+- Warm memory-cache lookups are constant-time; role graph resolution, extended
+  rule reads, attribute conditions, Redis I/O and audit fsync add work. Measure
+  the actual deployment rather than assuming historical benchmark latency.
+- Recursive traversals and SQL recursion limits constrain pathological role
+  graphs. Registration of long chains is quadratic. Keep hierarchies shallow.
+- Passing tests/scans are dated evidence, not universal workload guarantees.
+  Fiber v3, Echo v5 and Gin v1 are the supported framework major lines.
