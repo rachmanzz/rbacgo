@@ -22,6 +22,10 @@ type Enforcer struct {
 	store Store
 	env   *envConfig
 	cache CacheBackend
+	// cacheMu orders cache writes against invalidation; cacheGeneration detects
+	// lookups that began before a mutation or remote invalidation.
+	cacheMu         sync.Mutex
+	cacheGeneration uint64
 	// tenant scopes every role, user, and cache entry (see WithTenant).
 	// Required: New returns ErrTenantRequired without it.
 	tenant string
@@ -458,12 +462,21 @@ func (e *Enforcer) HasRole(ctx context.Context, userID, roleName string) (bool, 
 // permissionsFor returns the effective permission set for a user, consulting
 // the cache when enabled.
 func (e *Enforcer) permissionsFor(ctx context.Context, userID string) (permissionSet, error) {
+	e.cacheMu.Lock()
+	generation := e.cacheGeneration
+	e.cacheMu.Unlock()
 	if e.cache != nil {
 		if v, ok := e.cache.Get(e.cacheKey(userID)); ok {
 			if ps, ok := v.(permissionSet); ok {
 				return ps, nil
 			}
 		}
+	}
+	versioned, shared := e.cache.(GenerationCacheBackend)
+	var token string
+	var tokenOK bool
+	if shared {
+		token, tokenOK = versioned.Generation(e.cacheKey(userID))
 	}
 	ps := make(permissionSet)
 	roles, err := e.store.GetRoles(ctx, e.userKey(userID))
@@ -476,20 +489,40 @@ func (e *Enforcer) permissionsFor(ctx context.Context, userID string) (permissio
 		}
 	}
 	if e.cache != nil {
-		e.cache.Set(e.cacheKey(userID), ps)
+		e.cacheMu.Lock()
+		if generation == e.cacheGeneration {
+			if shared {
+				if tokenOK {
+					versioned.SetIfGeneration(e.cacheKey(userID), ps, token)
+				}
+			} else {
+				e.cache.Set(e.cacheKey(userID), ps)
+			}
+		}
+		e.cacheMu.Unlock()
 	}
 	return ps, nil
 }
 
 func (e *Enforcer) flushCache() {
+	e.cacheMu.Lock()
+	defer e.cacheMu.Unlock()
+	e.cacheGeneration++
 	if e.cache != nil {
 		e.cache.Flush()
 	}
 }
 
 func (e *Enforcer) dropCache(userID string) {
+	e.dropCacheKey(e.cacheKey(userID))
+}
+
+func (e *Enforcer) dropCacheKey(key string) {
+	e.cacheMu.Lock()
+	defer e.cacheMu.Unlock()
+	e.cacheGeneration++
 	if e.cache != nil {
-		e.cache.Delete(e.cacheKey(userID))
+		e.cache.Delete(key)
 	}
 }
 
@@ -535,10 +568,10 @@ func (e *Enforcer) applyInvalidation(ev InvalidationEvent) {
 	// cache is never nil here.
 	switch ev.Kind {
 	case InvalidateFlush:
-		e.cache.Flush()
+		e.flushCache()
 	case InvalidateDrop:
 		if ev.User != "" {
-			e.cache.Delete(ev.User)
+			e.dropCacheKey(ev.User)
 		}
 	}
 }
@@ -552,6 +585,11 @@ func (e *Enforcer) Close() error {
 	e.closeOnce.Do(func() {
 		if e.stopInvalidation != nil {
 			close(e.stopInvalidation)
+			if inv, ok := e.invalidator.(interface {
+				unsubscribe(<-chan InvalidationEvent)
+			}); ok {
+				inv.unsubscribe(e.invalidationMsgs)
+			}
 		}
 		if e.ownedClient != nil {
 			_ = e.ownedClient.Close()

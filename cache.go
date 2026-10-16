@@ -2,6 +2,7 @@ package rbacgo
 
 import (
 	"container/list"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -19,14 +20,27 @@ type CacheBackend interface {
 	Flush()
 }
 
+// GenerationCacheBackend optionally prevents stale cache fills across enforcers.
+// Implementations must return an opaque token for the key and atomically reject
+// SetIfGeneration after Delete/Flush invalidates it. Invalidated tokens must
+// never become valid again, including after metadata expiration or recreation.
+// A false result disables the fill.
+// Custom backends without this interface retain per-enforcer protection only.
+type GenerationCacheBackend interface {
+	CacheBackend
+	Generation(key string) (string, bool)
+	SetIfGeneration(key string, value any, generation string)
+}
+
 // memoryLRU is an in-house, fixed-capacity LRU cache with TTL eviction. It has
 // zero third-party dependencies.
 type memoryLRU struct {
-	mu    sync.Mutex
-	cap   int
-	ttl   time.Duration
-	order *list.List
-	items map[string]*list.Element
+	mu         sync.Mutex
+	generation uint64
+	cap        int
+	ttl        time.Duration
+	order      *list.List
+	items      map[string]*list.Element
 }
 
 type lruEntry struct {
@@ -68,9 +82,27 @@ func (c *memoryLRU) Get(key string) (any, bool) {
 	return entry.value, true
 }
 
+func (c *memoryLRU) Generation(_ string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strconv.FormatUint(c.generation, 10), true
+}
+
+func (c *memoryLRU) SetIfGeneration(key string, value any, generation string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if generation == strconv.FormatUint(c.generation, 10) {
+		c.setLocked(key, value)
+	}
+}
+
 func (c *memoryLRU) Set(key string, value any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLocked(key, value)
+}
+
+func (c *memoryLRU) setLocked(key string, value any) {
 	if el, ok := c.items[key]; ok {
 		entry := el.Value.(*lruEntry)
 		entry.value = value
@@ -88,6 +120,7 @@ func (c *memoryLRU) Set(key string, value any) {
 func (c *memoryLRU) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.generation++
 	if el, ok := c.items[key]; ok {
 		c.removeElement(el)
 	}
@@ -96,6 +129,7 @@ func (c *memoryLRU) Delete(key string) {
 func (c *memoryLRU) Flush() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.generation++
 	c.order.Init()
 	c.items = make(map[string]*list.Element)
 }

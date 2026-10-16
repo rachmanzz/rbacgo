@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -41,8 +42,9 @@ type CacheInvalidator interface {
 	Publish(ctx context.Context, ev InvalidationEvent) error
 	// Messages delivers events published by other instances. The channel
 	// is closed when the invalidator shuts down. One invalidator may feed
-	// several Enforcers: every subscriber consumes the same stream and
-	// invalidates only its own cache.
+	// several Enforcers: each call creates a new subscription receiving
+	// subsequent events, so every subscriber can invalidate its own cache.
+	// The Redis backend also sends a flush on initial subscription and recovery.
 	Messages() <-chan InvalidationEvent
 	// Close shuts the invalidator down and closes Messages().
 	Close() error
@@ -53,9 +55,13 @@ type CacheInvalidator interface {
 // PUBLISH hop instead of the cache TTL.
 type redisInvalidator struct {
 	ctx       context.Context
+	cancel    context.CancelFunc
 	client    redis.UniversalClient
 	channel   string
-	msgs      chan InvalidationEvent
+	mu        sync.Mutex
+	subs      map[<-chan InvalidationEvent]chan InvalidationEvent
+	closed    bool
+	ready     bool
 	sub       *redis.PubSub
 	closeOnce sync.Once
 }
@@ -73,37 +79,89 @@ func NewRedisInvalidator(client redis.UniversalClient, channel string) CacheInva
 	if channel == "" {
 		channel = "rbacgo:invalidation"
 	}
-	sub := client.Subscribe(context.Background(), channel)
+	ctx, cancel := context.WithCancel(context.Background())
+	sub := client.Subscribe(ctx, channel)
 	ri := &redisInvalidator{
-		ctx:     context.Background(),
+		ctx:     ctx,
+		cancel:  cancel,
 		client:  client,
 		channel: channel,
-		msgs:    make(chan InvalidationEvent, 64),
+		subs:    make(map[<-chan InvalidationEvent]chan InvalidationEvent),
 		sub:     sub,
 	}
 	go ri.run()
 	return ri
 }
 
-// run forwards subscription messages to the msgs channel. It exits when the
-// subscription is closed (Close or connection loss); the msgs channel is
-// closed so subscribers stop cleanly.
+// run keeps subscriber channels alive through transient connection failures.
+// go-redis reconnects and resubscribes on the next Receive call. After the
+// subscription acknowledgement, including the first, flush snapshots that
+// may have missed events before Redis confirmed the subscription.
 func (r *redisInvalidator) run() {
 	defer r.sub.Close()
-	defer close(r.msgs)
+	defer r.closeSubscribers()
+	delay := 50 * time.Millisecond
 	for {
-		msg, err := r.sub.ReceiveMessage(r.ctx)
+		msg, err := r.sub.Receive(r.ctx)
 		if err != nil {
-			return
-		}
-		var ev InvalidationEvent
-		if err := json.Unmarshal([]byte(msg.Payload), &ev); err != nil {
-			// Foreign payload on a shared channel: ignore.
+			if r.ctx.Err() != nil {
+				return
+			}
+			r.mu.Lock()
+			r.ready = false
+			r.mu.Unlock()
+			timer := time.NewTimer(delay)
+			select {
+			case <-r.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			delay = min(2*delay, time.Second)
 			continue
 		}
+		delay = 50 * time.Millisecond
+		switch msg := msg.(type) {
+		case *redis.Subscription:
+			if msg.Kind == "subscribe" && msg.Channel == r.channel {
+				r.mu.Lock()
+				r.ready = true
+				r.broadcastLocked(InvalidationEvent{Kind: InvalidateFlush})
+				r.mu.Unlock()
+			}
+		case *redis.Message:
+			var ev InvalidationEvent
+			if err := json.Unmarshal([]byte(msg.Payload), &ev); err == nil {
+				r.broadcast(ev)
+			}
+		}
+	}
+}
+
+func (r *redisInvalidator) broadcast(ev InvalidationEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.broadcastLocked(ev)
+}
+
+// All senders and channel closure hold mu. Receivers can only create room,
+// so after draining a full queue the replacement flush cannot block.
+func (r *redisInvalidator) broadcastLocked(ev InvalidationEvent) {
+	for _, ch := range r.subs {
 		select {
-		case r.msgs <- ev:
-		default: // subscriber backlog full: drop rather than block Redis
+		case ch <- ev:
+		default:
+			if ev.Kind == InvalidateFlush {
+				draining := true
+				for draining {
+					select {
+					case <-ch:
+					default:
+						draining = false
+					}
+				}
+				ch <- ev // One flush covers all discarded user invalidations.
+			}
 		}
 	}
 }
@@ -114,10 +172,46 @@ func (r *redisInvalidator) Publish(ctx context.Context, ev InvalidationEvent) er
 	return r.client.Publish(ctx, r.channel, payload).Err()
 }
 
-func (r *redisInvalidator) Messages() <-chan InvalidationEvent { return r.msgs }
+func (r *redisInvalidator) Messages() <-chan InvalidationEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ch := make(chan InvalidationEvent, 64)
+	if r.closed {
+		close(ch)
+	} else {
+		r.subs[ch] = ch
+		if r.ready {
+			ch <- InvalidationEvent{Kind: InvalidateFlush}
+		}
+	}
+	return ch
+}
+
+func (r *redisInvalidator) unsubscribe(ch <-chan InvalidationEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, ok := r.subs[ch]; ok {
+		delete(r.subs, ch)
+		close(c)
+	}
+}
+
+func (r *redisInvalidator) closeSubscribers() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	for ch, c := range r.subs {
+		delete(r.subs, ch)
+		close(c)
+	}
+}
 
 func (r *redisInvalidator) Close() error {
-	r.closeOnce.Do(func() { _ = r.sub.Close() })
+	r.closeOnce.Do(func() {
+		r.cancel()
+		_ = r.sub.Close()
+		r.closeSubscribers()
+	})
 	return nil
 }
 

@@ -42,6 +42,8 @@ func (s *memoryStore) AddRole(_ context.Context, role Role) error {
 			return ErrParentNotFound
 		}
 	}
+	role.Permissions = append([]Permission(nil), role.Permissions...)
+	role.Parents = append([]string(nil), role.Parents...)
 	s.roles[role.Name] = role
 	if err := detectCycle(s.roles, role.Name, map[string]bool{}); err != nil {
 		delete(s.roles, role.Name)

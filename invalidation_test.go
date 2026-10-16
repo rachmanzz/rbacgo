@@ -214,10 +214,14 @@ func TestRedisInvalidatorDefaultChannel(t *testing.T) {
 	invB := NewRedisInvalidator(client, "")
 	defer invA.Close()
 	defer invB.Close()
+	streams := map[string]<-chan InvalidationEvent{"a": invA.Messages(), "b": invB.Messages()}
+	for _, ch := range streams {
+		awaitInitialRedisFlush(t, ch)
+	}
 	if err := invA.Publish(ctx(), InvalidationEvent{Kind: InvalidateFlush}); err != nil {
 		t.Fatal(err)
 	}
-	for name, c := range map[string]<-chan InvalidationEvent{"a": invA.Messages(), "b": invB.Messages()} {
+	for name, c := range streams {
 		select {
 		case ev, ok := <-c:
 			if !ok {
@@ -261,6 +265,11 @@ func TestRedisInvalidatorRoundTrip(t *testing.T) {
 	invA := NewRedisInvalidator(client, "test:inval")
 	invB := NewRedisInvalidator(client, "test:inval")
 
+	streams := map[string]<-chan InvalidationEvent{"a": invA.Messages(), "b": invB.Messages()}
+	for _, ch := range streams {
+		awaitInitialRedisFlush(t, ch)
+	}
+
 	// Publish a foreign payload first: subscribers must skip it.
 	if err := client.Publish(ctx(), "test:inval", "{not json").Err(); err != nil {
 		t.Fatal(err)
@@ -271,7 +280,7 @@ func TestRedisInvalidatorRoundTrip(t *testing.T) {
 	// Both subscribers see exactly one event: the drop (the foreign payload
 	// is skipped). invA receives its own publish too — every subscriber on
 	// the channel gets every event.
-	for name, c := range map[string]<-chan InvalidationEvent{"a": invA.Messages(), "b": invB.Messages()} {
+	for name, c := range streams {
 		select {
 		case ev, ok := <-c:
 			if !ok {
@@ -289,11 +298,13 @@ func TestRedisInvalidatorRoundTrip(t *testing.T) {
 }
 
 // TestRedisInvalidatorFullBufferDrops proves a full subscriber backlog does
-// not block the subscription: events are dropped, later ones still arrive.
+// not block the subscription: queued events are coalesced into a flush.
 func TestRedisInvalidatorFullBufferDrops(t *testing.T) {
 	client := newTestRedisClient(t).(*redis.Client)
 	inv := NewRedisInvalidator(client, "test:inval")
 	defer inv.Close()
+	messages := inv.Messages()
+	awaitInitialRedisFlush(t, messages)
 	for i := 0; i < 128; i++ {
 		if err := inv.Publish(ctx(), InvalidationEvent{Kind: InvalidateFlush}); err != nil {
 			t.Fatal(err)
@@ -302,7 +313,7 @@ func TestRedisInvalidatorFullBufferDrops(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
-		case ev, ok := <-inv.Messages():
+		case ev, ok := <-messages:
 			if !ok {
 				t.Fatal("channel closed early")
 			}

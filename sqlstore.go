@@ -14,6 +14,7 @@ import (
 // and PostgreSQL dialects are officially supported.
 type sqlStore struct {
 	db          *sql.DB
+	dialect     dialect
 	ph          func(n int) string // placeholder generator for the active dialect
 	sql         sqlQueries
 	tablePrefix string
@@ -85,7 +86,7 @@ func NewSQLStore(db *sql.DB, opts ...SQLStoreOption) (Store, error) {
 		return nil, fmt.Errorf("rbacgo: nil *sql.DB")
 	}
 	d := detectDialect(db)
-	s := &sqlStore{db: db, ph: d.param}
+	s := &sqlStore{db: db, ph: d.param, dialect: d}
 	for _, opt := range opts {
 		if err := opt(s); err != nil {
 			return nil, err
@@ -146,6 +147,14 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 	roleParents := tablePrefix + "role_parents"
 	userRoles := tablePrefix + "role_assignments"
 	meta := tablePrefix + "meta"
+	prefixFilter := func(column string) string {
+		if d == dialectSQLite {
+			// SQLite LIKE folds ASCII case, which can expose another tenant.
+			// instr matches the literal prefix with case-sensitive semantics.
+			return fmt.Sprintf("instr(%s, %s) = 1", column, p(1))
+		}
+		return fmt.Sprintf(`%s LIKE %s ESCAPE '\'`, column, p(1))
+	}
 	return sqlQueries{
 		createTables: strings.Join([]string{
 			`CREATE TABLE IF NOT EXISTS ` + roles + ` (name TEXT PRIMARY KEY)`,
@@ -194,15 +203,15 @@ func buildQueries(d dialect, tablePrefix string) sqlQueries {
 		listRoles: fmt.Sprintf(
 			`SELECT name FROM %s ORDER BY name`, roles),
 		listRolesByPrefix: fmt.Sprintf(
-			`SELECT name FROM %s WHERE name LIKE %s ESCAPE '\' ORDER BY name`, roles, p(1)),
+			`SELECT name FROM %s WHERE %s ORDER BY name`, roles, prefixFilter("name")),
 		listPerms: fmt.Sprintf(
 			`SELECT role_name, resource, action FROM %s ORDER BY role_name`, rolePerms),
 		listPermsByPrefix: fmt.Sprintf(
-			`SELECT role_name, resource, action FROM %s WHERE role_name LIKE %s ESCAPE '\' ORDER BY role_name`, rolePerms, p(1)),
+			`SELECT role_name, resource, action FROM %s WHERE %s ORDER BY role_name`, rolePerms, prefixFilter("role_name")),
 		listParents: fmt.Sprintf(
 			`SELECT role_name, parent_name FROM %s ORDER BY role_name`, roleParents),
 		listParentsByPrefix: fmt.Sprintf(
-			`SELECT role_name, parent_name FROM %s WHERE role_name LIKE %s ESCAPE '\' ORDER BY role_name`, roleParents, p(1)),
+			`SELECT role_name, parent_name FROM %s WHERE %s ORDER BY role_name`, roleParents, prefixFilter("role_name")),
 		policyVersion: fmt.Sprintf(
 			`SELECT value FROM %s WHERE key = 'policy'`, meta),
 		nextPolicyVersion: fmt.Sprintf(
@@ -324,7 +333,13 @@ func (s *sqlStore) ListRoles(ctx context.Context) ([]Role, error) {
 // alphabetically sorted. Enforcers on shared stores use it so a single
 // tenant's listing loads only that tenant's rows.
 func (s *sqlStore) ListRolesByPrefix(ctx context.Context, prefix string) ([]Role, error) {
-	pattern := escapeLike(prefix) + "%"
+	if prefix == "" {
+		return s.ListRoles(ctx)
+	}
+	pattern := prefix
+	if s.dialect != dialectSQLite {
+		pattern = escapeLike(prefix) + "%"
+	}
 	return s.listRolesPattern(ctx, s.sql.listRolesByPrefix, s.sql.listPermsByPrefix, s.sql.listParentsByPrefix, pattern)
 }
 
