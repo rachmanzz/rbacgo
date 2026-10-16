@@ -6,6 +6,7 @@
   **latest** version and are **MIT-compatible**.
 - **Last recorded online verification:** 2026-08-02 (historical, not a current freshness guarantee)
 - **Inventory synchronized with module manifests:** 2026-10-16
+- **Dependency update licenses checked:** 2026-10-16, downloaded module LICENSE files for miniredis 2.40.0, go-redis 9.23.0, Fiber 3.6.0, Echo 5.4.0, and go-brrr 1.2.0
 - **New driver license checked:** go-mysql-org/go-mysql v1.16.0, MIT plus bundled BSD-3-Clause notice; official repository and downloaded module LICENSE
 - **Policy owner:** maintainers; re-verify before each release.
 
@@ -37,8 +38,8 @@
 | Library | Module | Purpose | Version | License | MIT-compatible |
 | --- | --- | --- | --- | --- | --- |
 | go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.52 | MIT | ✅ |
-| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.22.0 | BSD-2-Clause | ✅ |
-| miniredis | `github.com/alicebob/miniredis/v2` | In-process Redis for tests (test-only) | v2.39.0 | MIT | ✅ |
+| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.23.0 | BSD-2-Clause | ✅ |
+| miniredis | `github.com/alicebob/miniredis/v2` | In-process Redis for tests (test-only) | v2.40.0 | MIT | ✅ |
 | pgx | `github.com/jackc/pgx/v5` | PostgreSQL driver for the **integration test** (`//go:build integration`, test-only) | v5.11.0 | MIT | ✅ |
 
 ### Storage (recommended drivers, in the root module)
@@ -52,17 +53,18 @@
 | --- | --- | --- | --- | --- | --- |
 | pgx | `github.com/jackc/pgx/v5` | PostgreSQL driver + toolkit (recommended for SQL store; incl. `pgxpool` + `stdlib` adapter) | v5.11.0 | MIT | ✅ |
 | go-sqlite3 | `github.com/mattn/go-sqlite3` | SQLite driver — **default embedded store** (`:memory:` / file) | v1.14.52 | MIT | ✅ |
-| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.22.0 | BSD-2-Clause | ✅ |
+| go-redis | `github.com/redis/go-redis/v9` | Redis client (LRU cache backend) | v9.23.0 | BSD-2-Clause | ✅ |
 | *(in-house)* | — | LRU cache implementation (cache layer) — implemented internally, **zero deps** (see §5) | — | MIT | ✅ |
 
 ### Adapters (each is its own module)
 
 | Library | Module | Purpose | Version | License | MIT-compatible |
 | --- | --- | --- | --- | --- | --- |
-| Fiber | `github.com/gofiber/fiber/v3` | Fiber v3 adapter | v3.5.0 | MIT | ✅ |
-| Echo | `github.com/labstack/echo/v5` | Echo v5 adapter | v5.3.1 | MIT | ✅ |
+| Fiber | `github.com/gofiber/fiber/v3` | Fiber v3 adapter | v3.6.0 | MIT | ✅ |
+| Echo | `github.com/labstack/echo/v5` | Echo v5 adapter | v5.4.0 | MIT | ✅ |
 | Gin | `github.com/gin-gonic/gin` | Gin v1 adapter | v1.12.0 | MIT | ✅ |
-| fasthttp (transitive, via Fiber) | `github.com/valyala/fasthttp` | Fiber's HTTP engine | v1.73.0 | MIT | ✅ |
+| go-brrr (transitive, via Fiber/fasthttp) | `github.com/molecule-man/go-brrr` | Compression support | v1.2.0 | MIT | ✅ |
+| fasthttp (transitive, via Fiber) | `github.com/valyala/fasthttp` | Fiber's HTTP engine | v1.75.0 | MIT | ✅ |
 
 The `http` adapter adds no framework dependency beyond the core module. The
 core module still brings its SQLite and Redis backend dependencies.
@@ -85,7 +87,9 @@ core module still brings its SQLite and Redis backend dependencies.
 
 - Run `go get -u ./...` per module and re-run tests before committing.
 - Recommended: enable **Dependabot** (GitHub) or **Renovate** with weekly cadence and
-  `group:all` for each Go module in the monorepo.
+  one wildcard dependency group spanning all seven Go module directories.
+  Their local replace directives require coordinated updates. See
+  [Dependabot configuration options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#groups).
 - Add a CI step that fails when `go.mod` has known-outdated or vulnerable deps
   (`govulncheck` + `go list -m -u`).
 - Before every release: re-verify versions in this file against live sources and update.
@@ -135,8 +139,8 @@ when redistributing binaries:
 - integration/mysql directly requires github.com/go-mysql-org/go-mysql v1.16.0.
   Its MIT LICENSE and bundled Vitess BSD-3-Clause notice are included in
   THIRD_PARTY_NOTICES. See https://github.com/go-mysql-org/go-mysql/tree/v1.16.0.
-- The user approved minimum Go 1.26.0 for Fiber/Gin/examples to install
-  golang.org/x/net v0.60.0 and its dependency family. Core/http/echo retain
-  minimum 1.25.7. Recommended/CI toolchain is go1.27.2 following the security scan.
+- The user approved minimum Go 1.26.0 across all seven modules, including
+  core/http/echo/integration/mysql after the Redis dependency update.
+  Recommended/CI toolchain remains go1.27.2.
 - An up-to-date inventory is not proof of global dependency freshness or absence
   of vulnerabilities. See audit v3 for dated symbol-level scan results.

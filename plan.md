@@ -281,5 +281,6 @@ Implementation now includes bounded/leased tenant lifecycle, policy rules,
 metadata, atomic batches, metrics, durable audit, explicit MySQL, and Redis
 Cluster flushing. Contracts and operational limits are in docs/feature-guide.md;
 verification evidence is tracked by .knowledges/audit/feature-audit_v3.md.
-The Go 1.26 minimum for Fiber/Gin/examples was separately approved to install
-patched x/net; core/http/echo retain their 1.25.7 module minimum.
+The user subsequently approved minimum Go 1.26.0 across all seven modules
+for the coordinated Dependabot updates. Toolchain remains go1.27.2.
+Dependency follow-up evidence is in .knowledges/audit/dependabot-fix_v1.md.

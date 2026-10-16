@@ -688,9 +688,8 @@ from its own auth layer).
 
 ## Compatibility
 
-- **Go:** core, http, and echo retain minimum `go 1.25.7`.
+- **Go:** all modules require minimum `go 1.26.0`.
   The recommended/CI toolchain is `go1.27.2` for current security fixes.
-  Fiber, Gin, and examples require Go 1.26.0 after the approved x/net patch update.
 - **Core algorithms:** use standard-library data structures. The root module
   still has runtime dependencies for SQLite (`go-sqlite3`) and Redis
   (`go-redis`), even when an application selects the memory backend. Test
@@ -775,9 +774,12 @@ configure `WithMetrics` and `WithAuditSink`; see the
 ## Security verification
 
 Go 1.27.2 and patched x/net dependencies are selected following the vulnerability
-scan. The resulting Go 1.26 minimum for Fiber/Gin/examples was explicitly approved.
+scan. The Go 1.26.0 minimum across all modules was explicitly approved.
 See [.knowledges/audit/feature-audit_v3.md](.knowledges/audit/feature-audit_v3.md)
-for dated scan/test evidence. Symbol-level scans do not prove that every possible
+for feature-completion evidence and
+[Dependabot remediation](.knowledges/audit/dependabot-fix_v1.md) for the subsequent
+coordinated dependency update and minimum-Go verification. Symbol-level scans
+do not prove that every possible
 application integration is safe; rerun them for each deployment and release.
 
 ## Scope and non-goals

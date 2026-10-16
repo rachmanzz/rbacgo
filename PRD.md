@@ -3,7 +3,7 @@
 - **Status:** Draft
 - **Author:** rbacgo team
 - **Module path:** `github.com/rachmanzz/rbacgo`
-- **Go version:** core/http/echo minimum 1.25.7; Fiber/Gin/examples minimum 1.26.0; toolchain 1.27.2
+- **Go version:** all modules minimum 1.26.0; toolchain 1.27.2
 - **Last updated:** 2026-10-16
 
 ---
@@ -239,7 +239,7 @@ See docs/feature-guide.md for contracts, examples, ownership, and limitations.
 - **Performance target:** warm in-memory cache hits under 1 ms in a documented
   benchmark workload; no universal latency guarantee. Cache hits use constant-time
   lookup/LRU bookkeeping; misses traverse the role graph and Redis adds network I/O.
-- **Compatibility:** CI selects Go 1.27.2 (core/http/echo minimum 1.25.7; Fiber/Gin/examples minimum 1.26.0); the core engine logic has **zero**
+- **Compatibility:** CI selects Go 1.27.2 (all modules minimum 1.26.0); the core engine logic has **zero**
   third-party dependencies (stdlib only). The module ships optional backends — embedded SQLite
   (`go-sqlite3`) and Redis cache (`go-redis`) — which are the module's only third-party
   runtime dependencies; test dependencies are listed in third-party.md. Backend

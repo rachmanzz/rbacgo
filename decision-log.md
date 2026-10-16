@@ -869,3 +869,16 @@ created a cycle. After serialization, exactly one commits and the other returns
 ErrCycleDetected. Overlapping deletion/detail/assignment tests also reject stale
 writes. This deliberately trades write concurrency for graph and role-detail
 integrity across pools/processes; reads remain non-snapshot operations.
+
+
+## Dependabot module synchronization (2026-10-16)
+
+The user approved minimum Go 1.26.0 and toolchain go1.27.2 across all seven
+modules. Consolidate the version changes in Dependabot PRs #8, #11, #12, and
+#13: Echo 5.4.0, Fiber 3.6.0, miniredis 2.40.0 and go-redis 9.23.0. Local
+replace directives mean core/framework upgrades also affect adapter and example
+requirements. Regenerate every affected go.mod/go.sum without relaxing the CI
+go mod tidy -diff check. Use one Dependabot Go update entry listing all module
+directories and a wildcard group, so related version updates are proposed
+together. Audit v3 records the earlier dependency baseline; it is historical
+verification evidence, not a claim about this later update.

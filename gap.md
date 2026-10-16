@@ -20,7 +20,7 @@
 | Redis Cluster | Per-primary scanning and routed single-key deletes | Best-effort under partitions/resharding; not instantaneous global revocation |
 | Documentation | English feature guide, corrected examples/claims, explicit persistence/lifecycle contracts | Keep versioned audit evidence and current guidance aligned |
 | Verification | Race suites, live DB/cluster integration, security scans, concurrency workloads, benchmarks | Results are dated workload-specific evidence, not universal guarantees |
-| Compatibility/security | Patched Go 1.27.2 toolchain and x/net v0.60.0 family | User approved Go 1.26 minimum for Fiber/Gin/examples; core/http/echo retain 1.25.7 |
+| Compatibility/security | Patched Go 1.27.2 toolchain and x/net v0.60.0 family | User approved Go 1.26.0 minimum across all seven modules |
 
 ## Deliberate integration boundaries
 
